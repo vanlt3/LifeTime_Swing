@@ -5571,7 +5571,7 @@ class MarketauxProvider(NewsProvider):
                 news_items = news_data.get('data', [])
                 return [self._standardize_news(
                     source="Marketaux", title=item.get('title'), summary=item.get('snippet'),
-                    url=item.get('url'), published_at=pd.to_datetime(item.get('published_at')).tz_localize(None)
+                    url=item.get('url'), published_at=pd.to_datetime(item.get('published_at')).tz_localize(None).to_pydatetime()
                 ) for item in news_items if item.get('title')]
         except Exception as e:
             logging.error(f"Marketaux error: {e}")
@@ -5613,7 +5613,7 @@ class NewsApiOrgProvider(NewsProvider):
                 title=item.get('title'),
                 summary=item.get('description'),
                 url=item.get('url'),
-                published_at=pd.to_datetime(item.get('publishedAt')).tz_localize(None)
+                published_at=pd.to_datetime(item.get('publishedAt')).tz_localize(None).to_pydatetime()
             ) for item in news_items if item.get('title')]
 
         except Exception as e:
@@ -6046,7 +6046,7 @@ class NewsEconomicManager:
                     }
                 }
                 with open(self.daily_news_file, 'w', encoding='utf-8') as f:
-                    json.dump(initial_data, f, indent=2, ensure_ascii=False)
+                    json.dump(initial_data, f, indent=2, ensure_ascii=False, default=self._json_serializer)
                 print(f"📝 [News Storage] Created daily news file: {self.daily_news_file}")
             
             # Create news index file
@@ -6102,7 +6102,7 @@ class NewsEconomicManager:
                 
                 # Save updated data
                 with open(self.daily_news_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    json.dump(data, f, indent=2, ensure_ascii=False, default=self._json_serializer)
                 
                 print(f"💾 [News Storage] Saved {len(new_items)} new items for {symbol}")
                 
@@ -6113,6 +6113,14 @@ class NewsEconomicManager:
             print(f"❌ [News Storage] Error saving news for {symbol}: {e}")
         finally:
             self.news_file_lock = False
+    
+    def _json_serializer(self, obj):
+        """Custom JSON serializer to handle pandas Timestamp and datetime objects"""
+        if hasattr(obj, 'isoformat'):
+            return obj.isoformat()
+        elif hasattr(obj, 'to_pydatetime'):
+            return obj.to_pydatetime().isoformat()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
     
     def _update_news_index(self):
         """Update the news index file"""
@@ -6146,7 +6154,7 @@ class NewsEconomicManager:
             
             # Save index
             with open(self.news_index_file, 'w', encoding='utf-8') as f:
-                json.dump(index_data, f, indent=2, ensure_ascii=False)
+                json.dump(index_data, f, indent=2, ensure_ascii=False, default=self._json_serializer)
                 
         except Exception as e:
             print(f"❌ [News Storage] Error updating index: {e}")
@@ -6455,7 +6463,7 @@ class DailyNewsScheduler:
             
             # Save updated summaries
             with open(summary_file, 'w', encoding='utf-8') as f:
-                json.dump(summaries, f, indent=2, ensure_ascii=False)
+                json.dump(summaries, f, indent=2, ensure_ascii=False, default=self._json_serializer)
             
             print(f"💾 [Daily News Scheduler] Summary saved to {summary_file}")
             
