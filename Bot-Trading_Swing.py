@@ -1,4 +1,4 @@
-﻿# Standard library imports
+# Standard library imports
 print("🚀 [Bot] Starting imports...")
 
 # ==================================================
@@ -25,6 +25,7 @@ import logging
 import re
 import sqlite3
 import time
+import threading
 import warnings
 print("✅ [Bot] Basic imports completed")
 import glob
@@ -5684,6 +5685,13 @@ class NewsEconomicManager:
             self.cache_hit_count = {}
             self.cache_miss_count = {}
             print("[NewsEconomicManager] Cache attributes initialized")
+            
+            # Initialize news file storage system
+            self.news_storage_dir = "/workspace/news_data"
+            self.daily_news_file = None
+            self.news_file_lock = False
+            self._setup_news_storage()
+            print("✅ [NewsEconomicManager] News file storage system initialized")
         
             # Initialize news quality scorer
             print("🔄 [NewsEconomicManager] Initializing NewsQualityScorer...")
@@ -6008,12 +6016,426 @@ class NewsEconomicManager:
         # Luu vo cache
         self.news_cache[symbol] = {'news': unique_news, 'timestamp': datetime.now()}
 
+        # Save news to file system
+        self._save_news_to_file(symbol, unique_news)
+        
         return unique_news
+    
+    def _setup_news_storage(self):
+        """Setup news storage directory and file system"""
+        try:
+            # Create news storage directory
+            if not os.path.exists(self.news_storage_dir):
+                os.makedirs(self.news_storage_dir, exist_ok=True)
+                print(f"📁 [News Storage] Created directory: {self.news_storage_dir}")
+            
+            # Create today's news file
+            today = datetime.now().strftime("%Y-%m-%d")
+            self.daily_news_file = os.path.join(self.news_storage_dir, f"news_{today}.json")
+            
+            # Initialize daily news file if it doesn't exist
+            if not os.path.exists(self.daily_news_file):
+                initial_data = {
+                    "date": today,
+                    "created_at": datetime.now().isoformat(),
+                    "symbols": {},
+                    "summary": {
+                        "total_news": 0,
+                        "symbols_covered": 0,
+                        "last_updated": datetime.now().isoformat()
+                    }
+                }
+                with open(self.daily_news_file, 'w', encoding='utf-8') as f:
+                    json.dump(initial_data, f, indent=2, ensure_ascii=False)
+                print(f"📝 [News Storage] Created daily news file: {self.daily_news_file}")
+            
+            # Create news index file
+            self.news_index_file = os.path.join(self.news_storage_dir, "news_index.json")
+            self._update_news_index()
+            
+        except Exception as e:
+            print(f"❌ [News Storage] Error setting up storage: {e}")
+    
+    def _save_news_to_file(self, symbol, news_items):
+        """Save news items to daily file"""
+        if self.news_file_lock:
+            return  # Avoid concurrent writes
+        
+        try:
+            self.news_file_lock = True
+            
+            # Check if we need to create a new daily file
+            today = datetime.now().strftime("%Y-%m-%d")
+            expected_file = os.path.join(self.news_storage_dir, f"news_{today}.json")
+            
+            if expected_file != self.daily_news_file:
+                self.daily_news_file = expected_file
+                self._setup_news_storage()
+            
+            # Load existing data
+            with open(self.daily_news_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Add/update symbol news
+            if symbol not in data["symbols"]:
+                data["symbols"][symbol] = {
+                    "news_items": [],
+                    "last_updated": datetime.now().isoformat(),
+                    "total_items": 0
+                }
+            
+            # Update news items (avoid duplicates)
+            existing_titles = {item.get('title', '') for item in data["symbols"][symbol]["news_items"]}
+            new_items = [item for item in news_items if item.get('title', '') not in existing_titles]
+            
+            if new_items:
+                data["symbols"][symbol]["news_items"].extend(new_items)
+                data["symbols"][symbol]["last_updated"] = datetime.now().isoformat()
+                data["symbols"][symbol]["total_items"] = len(data["symbols"][symbol]["news_items"])
+                
+                # Update summary
+                data["summary"]["total_news"] = sum(
+                    symbol_data["total_items"] for symbol_data in data["symbols"].values()
+                )
+                data["summary"]["symbols_covered"] = len(data["symbols"])
+                data["summary"]["last_updated"] = datetime.now().isoformat()
+                
+                # Save updated data
+                with open(self.daily_news_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                
+                print(f"💾 [News Storage] Saved {len(new_items)} new items for {symbol}")
+                
+                # Update index
+                self._update_news_index()
+            
+        except Exception as e:
+            print(f"❌ [News Storage] Error saving news for {symbol}: {e}")
+        finally:
+            self.news_file_lock = False
+    
+    def _update_news_index(self):
+        """Update the news index file"""
+        try:
+            index_data = {
+                "last_updated": datetime.now().isoformat(),
+                "available_dates": [],
+                "total_files": 0,
+                "symbols_tracked": set()
+            }
+            
+            # Scan news directory for files
+            if os.path.exists(self.news_storage_dir):
+                for filename in os.listdir(self.news_storage_dir):
+                    if filename.startswith("news_") and filename.endswith(".json"):
+                        date_str = filename.replace("news_", "").replace(".json", "")
+                        index_data["available_dates"].append(date_str)
+                        
+                        # Load file to get symbols
+                        try:
+                            file_path = os.path.join(self.news_storage_dir, filename)
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                file_data = json.load(f)
+                                index_data["symbols_tracked"].update(file_data.get("symbols", {}).keys())
+                        except Exception:
+                            pass
+            
+            index_data["available_dates"].sort(reverse=True)
+            index_data["total_files"] = len(index_data["available_dates"])
+            index_data["symbols_tracked"] = sorted(list(index_data["symbols_tracked"]))
+            
+            # Save index
+            with open(self.news_index_file, 'w', encoding='utf-8') as f:
+                json.dump(index_data, f, indent=2, ensure_ascii=False)
+                
+        except Exception as e:
+            print(f"❌ [News Storage] Error updating index: {e}")
+    
+    def get_news_from_file(self, symbol=None, date=None):
+        """
+        Get news from stored files - Bot can use this to read news
+        """
+        try:
+            # Use today's date if not specified
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+            
+            news_file = os.path.join(self.news_storage_dir, f"news_{date}.json")
+            
+            if not os.path.exists(news_file):
+                print(f"📰 [News Reader] No news file found for {date}")
+                return None
+            
+            with open(news_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if symbol is None:
+                # Return all news for the date
+                print(f"📖 [News Reader] Retrieved all news for {date}: {data['summary']['total_news']} items")
+                return data
+            else:
+                # Return news for specific symbol
+                symbol_news = data.get("symbols", {}).get(symbol)
+                if symbol_news:
+                    print(f"📖 [News Reader] Retrieved {symbol_news['total_items']} news items for {symbol} on {date}")
+                    return symbol_news["news_items"]
+                else:
+                    print(f"📰 [News Reader] No news found for {symbol} on {date}")
+                    return []
+                    
+        except Exception as e:
+            print(f"❌ [News Reader] Error reading news from file: {e}")
+            return None
+    
+    def get_latest_news_summary(self):
+        """Get summary of latest news for bot consumption"""
+        try:
+            if not os.path.exists(self.news_index_file):
+                return None
+            
+            with open(self.news_index_file, 'r', encoding='utf-8') as f:
+                index_data = json.load(f)
+            
+            if not index_data["available_dates"]:
+                return None
+            
+            # Get latest date
+            latest_date = index_data["available_dates"][0]
+            latest_news = self.get_news_from_file(date=latest_date)
+            
+            if latest_news:
+                summary = {
+                    "date": latest_date,
+                    "total_news": latest_news["summary"]["total_news"],
+                    "symbols_covered": latest_news["summary"]["symbols_covered"],
+                    "symbols": list(latest_news["symbols"].keys()),
+                    "last_updated": latest_news["summary"]["last_updated"]
+                }
+                print(f"📊 [News Summary] Latest: {summary['total_news']} news items for {summary['symbols_covered']} symbols")
+                return summary
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ [News Summary] Error getting summary: {e}")
+            return None
 
     def analyze_sentiment(self, news_items):
         if not news_items:
             return {"score": 0.0, "reasoning": "No newfixvailable."}
         return self.llm_analyzer.analyze_sentiment_of_news(news_items)
+
+
+# === DAILY NEWS SCHEDULER ===
+class DailyNewsScheduler:
+    """
+    Scheduler to fetch news every morning and maintain news files
+    """
+    
+    def __init__(self, news_manager, symbols_to_track=None):
+        self.news_manager = news_manager
+        self.symbols_to_track = symbols_to_track or ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"]
+        self.scheduler_active = False
+        self.last_fetch_date = None
+        self.fetch_times = [7, 8, 12, 16, 20]  # Hours to fetch news (UTC)
+        self.scheduler_thread = None
+        print("📅 [Daily News Scheduler] Initialized")
+    
+    def start_scheduler(self):
+        """Start the daily news scheduling"""
+        if self.scheduler_active:
+            print("📅 [Daily News Scheduler] Already running")
+            return
+        
+        self.scheduler_active = True
+        self.scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
+        self.scheduler_thread.start()
+        print("🚀 [Daily News Scheduler] Started - will fetch news at 07:00, 08:00, 12:00, 16:00, 20:00 UTC")
+    
+    def stop_scheduler(self):
+        """Stop the daily news scheduling"""
+        self.scheduler_active = False
+        if self.scheduler_thread:
+            self.scheduler_thread.join(timeout=5)
+        print("⏹️ [Daily News Scheduler] Stopped")
+    
+    def _scheduler_loop(self):
+        """Main scheduler loop"""
+        while self.scheduler_active:
+            try:
+                current_time = datetime.now()
+                current_hour = current_time.hour
+                current_date = current_time.strftime("%Y-%m-%d")
+                
+                # Check if it's time to fetch news
+                should_fetch = (
+                    current_hour in self.fetch_times and
+                    self.last_fetch_date != f"{current_date}_{current_hour}"
+                )
+                
+                if should_fetch:
+                    print(f"⏰ [Daily News Scheduler] Time to fetch news: {current_time.strftime('%Y-%m-%d %H:%M')} UTC")
+                    self._fetch_daily_news()
+                    self.last_fetch_date = f"{current_date}_{current_hour}"
+                
+                # Sleep for 30 minutes before checking again
+                time.sleep(1800)  # 30 minutes
+                
+            except Exception as e:
+                print(f"❌ [Daily News Scheduler] Error in scheduler loop: {e}")
+                time.sleep(300)  # Sleep 5 minutes on error
+    
+    def _fetch_daily_news(self):
+        """Fetch news for all tracked symbols"""
+        try:
+            print("📰 [Daily News Scheduler] Starting daily news fetch...")
+            fetch_start_time = datetime.now()
+            
+            total_news = 0
+            successful_symbols = 0
+            failed_symbols = []
+            
+            for symbol in self.symbols_to_track:
+                try:
+                    print(f"🔍 [Daily News Scheduler] Fetching news for {symbol}...")
+                    
+                    # Use asyncio to fetch news
+                    news_items = asyncio.run(self.news_manager.get_aggregated_news(symbol))
+                    
+                    if news_items:
+                        total_news += len(news_items)
+                        successful_symbols += 1
+                        print(f"✅ [Daily News Scheduler] {symbol}: {len(news_items)} news items")
+                    else:
+                        print(f"⚠️ [Daily News Scheduler] {symbol}: No news found")
+                    
+                    # Small delay between symbols to avoid rate limiting
+                    time.sleep(2)
+                    
+                except Exception as e:
+                    print(f"❌ [Daily News Scheduler] Error fetching news for {symbol}: {e}")
+                    failed_symbols.append(symbol)
+            
+            fetch_duration = (datetime.now() - fetch_start_time).total_seconds()
+            
+            # Create daily summary
+            summary = {
+                "timestamp": datetime.now().isoformat(),
+                "total_symbols_attempted": len(self.symbols_to_track),
+                "successful_symbols": successful_symbols,
+                "failed_symbols": failed_symbols,
+                "total_news_items": total_news,
+                "fetch_duration_seconds": fetch_duration,
+                "symbols_tracked": self.symbols_to_track
+            }
+            
+            # Save daily summary
+            self._save_daily_summary(summary)
+            
+            print(f"📊 [Daily News Scheduler] Fetch completed:")
+            print(f"   - Symbols processed: {successful_symbols}/{len(self.symbols_to_track)}")
+            print(f"   - Total news items: {total_news}")
+            print(f"   - Duration: {fetch_duration:.1f} seconds")
+            
+            if failed_symbols:
+                print(f"   - Failed symbols: {', '.join(failed_symbols)}")
+            
+            # Send Discord notification if configured
+            self._send_daily_news_notification(summary)
+            
+        except Exception as e:
+            print(f"❌ [Daily News Scheduler] Error in daily news fetch: {e}")
+    
+    def _save_daily_summary(self, summary):
+        """Save daily fetch summary to file"""
+        try:
+            summary_dir = "/workspace/news_data/summaries"
+            if not os.path.exists(summary_dir):
+                os.makedirs(summary_dir, exist_ok=True)
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            summary_file = os.path.join(summary_dir, f"daily_summary_{today}.json")
+            
+            # Load existing summaries if file exists
+            summaries = []
+            if os.path.exists(summary_file):
+                with open(summary_file, 'r', encoding='utf-8') as f:
+                    summaries = json.load(f)
+            
+            # Add new summary
+            summaries.append(summary)
+            
+            # Save updated summaries
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                json.dump(summaries, f, indent=2, ensure_ascii=False)
+            
+            print(f"💾 [Daily News Scheduler] Summary saved to {summary_file}")
+            
+        except Exception as e:
+            print(f"❌ [Daily News Scheduler] Error saving summary: {e}")
+    
+    def _send_daily_news_notification(self, summary):
+        """Send daily news notification to Discord"""
+        try:
+            if not DISCORD_WEBHOOK:
+                return
+            
+            # Create notification message
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
+            
+            embed = {
+                "title": "📰 Daily News Update",
+                "description": f"News fetch completed at {current_time}",
+                "color": 0x00ff00 if summary['successful_symbols'] == summary['total_symbols_attempted'] else 0xffaa00,
+                "fields": [
+                    {
+                        "name": "📊 Summary",
+                        "value": f"**Symbols:** {summary['successful_symbols']}/{summary['total_symbols_attempted']}\n**News Items:** {summary['total_news_items']}\n**Duration:** {summary['fetch_duration_seconds']:.1f}s",
+                        "inline": True
+                    }
+                ],
+                "footer": {
+                    "text": "Trading Bot - Daily News Scheduler"
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            if summary['failed_symbols']:
+                embed["fields"].append({
+                    "name": "⚠️ Failed Symbols",
+                    "value": ", ".join(summary['failed_symbols']),
+                    "inline": False
+                })
+            
+            payload = {
+                "embeds": [embed],
+                "username": "Trading Bot News"
+            }
+            
+            response = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
+            if response.status_code in [200, 204]:
+                print("✅ [Daily News Scheduler] Discord notification sent")
+            else:
+                print(f"⚠️ [Daily News Scheduler] Discord notification failed: {response.status_code}")
+                
+        except Exception as e:
+            print(f"❌ [Daily News Scheduler] Error sending notification: {e}")
+    
+    def force_fetch_now(self):
+        """Force immediate news fetch for testing"""
+        print("🚀 [Daily News Scheduler] Forcing immediate news fetch...")
+        self._fetch_daily_news()
+    
+    def get_scheduler_status(self):
+        """Get current scheduler status"""
+        return {
+            "active": self.scheduler_active,
+            "symbols_tracked": len(self.symbols_to_track),
+            "symbols": self.symbols_to_track,
+            "fetch_times": self.fetch_times,
+            "last_fetch_date": self.last_fetch_date,
+            "next_fetch_hours": [h for h in self.fetch_times if h > datetime.now().hour] or [self.fetch_times[0]]
+        }
 
     # NewsEconomicManager methods
 
@@ -9802,43 +10224,315 @@ class PortfolioEnvironment(gym.Env):
 class RLAgent:
     def __init__(self, model_path=None):
         self.model = None
+        self.reward_history = deque(maxlen=1000)
+        self.action_history = deque(maxlen=100)
+        self.state_memory = deque(maxlen=50)
+        self.performance_metrics = {
+            'total_rewards': 0,
+            'win_rate': 0,
+            'sharpe_ratio': 0,
+            'max_drawdown': 0,
+            'profit_factor': 0
+        }
+        
         if model_path and os.path.exists(model_path):
             self.model = PPO.load(model_path)
-            print(f"RL Agent loaded from {model_path}")
+            print(f"✅ Enhanced RL Agent loaded from {model_path}")
         else:
-            print(" RL Agent not loaded. Needs to be trained.")
+            print("🤖 Enhanced RL Agent not loaded. Needs to be trained.")
 
     def train(self, env, total_timesteps=20000, save_path=None):
         """
-        training PPO agent with Callback gim st Drawdown.
+        Enhanced training with improved reward functions and callbacks
         """
         if self.model:
             self.model.set_env(env)
         else:
-            # B n fromhtruy n cfromham sPPO has d Optuna ti uu ha duc
-            self.model = PPO("MlpPolicy", env, verbose=0, tensorboard_log=f"./ppo_tensorboard_{PRIMARY_TIMEFRAME.lower()}/")
+            # Enhanced PPO configuration with better hyperparameters
+            self.model = PPO(
+                "MlpPolicy", 
+                env, 
+                verbose=1, 
+                tensorboard_log=f"./ppo_tensorboard_{PRIMARY_TIMEFRAME.lower()}/",
+                learning_rate=3e-4,
+                n_steps=2048,
+                batch_size=64,
+                n_epochs=10,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                ent_coef=0.01,
+                vf_coef=0.5,
+                max_grad_norm=0.5
+            )
 
-        # <<< C I money: Kh i to v Using Callback >>>
-        # used training if in m t episode, ti kho n s t gi m qu 25%
-        drawdown_callback = StopTrainingOnMaxDrawdown(max_drawdown_threshold=0.25, verbose=1)
-        # <<< K T THC C I money >>>
+        # Enhanced callbacks for better training
+        callbacks = [
+            StopTrainingOnMaxDrawdown(max_drawdown_threshold=0.25, verbose=1),
+            EnhancedRewardCallback(self),
+            PerformanceMonitorCallback(self)
+        ]
 
-        print("🤖 Starting RL Agent training (with Drawdown monitoring)...")
-        # Truy n callback vo Function learn()
-        self.model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=drawdown_callback)
-        logging.info("RL Agent training completed.")
+        print("🤖 Starting Enhanced RL Agent training...")
+        print(f"   - Total timesteps: {total_timesteps}")
+        print(f"   - Callbacks: {len(callbacks)} active")
+        
+        # Train with enhanced callbacks
+        self.model.learn(
+            total_timesteps=total_timesteps, 
+            progress_bar=True, 
+            callback=callbacks
+        )
+        
+        # Calculate final performance metrics
+        self._calculate_final_metrics()
+        
+        logging.info("Enhanced RL Agent training completed.")
+        print(f"✅ Training completed. Final metrics:")
+        print(f"   - Win Rate: {self.performance_metrics['win_rate']:.2%}")
+        print(f"   - Sharpe Ratio: {self.performance_metrics['sharpe_ratio']:.3f}")
+        print(f"   - Max Drawdown: {self.performance_metrics['max_drawdown']:.2%}")
 
         if save_path:
             self.model.save(save_path)
-            print(f" RL Agent has d luu t i {save_path}")
+            # Save performance metrics alongside model
+            metrics_path = save_path + "_metrics.json"
+            with open(metrics_path, 'w') as f:
+                json.dump(self.performance_metrics, f, indent=2)
+            print(f"✅ Enhanced RL Agent saved to {save_path}")
+            print(f"✅ Performance metrics saved to {metrics_path}")
 
-    def predict(self, observation):
-        """Predicts the next action."""
+    def predict(self, observation, deterministic=True):
+        """Enhanced prediction with state memory and action tracking"""
         if not self.model:
-            return 0 # Default to Hcuf not trained
+            return 0  # Default to HOLD if not trained
 
-        action, _states = self.model.predict(observation, deterministic=True)
-        return action.item()
+        # Store state for analysis
+        self.state_memory.append(observation.copy() if hasattr(observation, 'copy') else observation)
+        
+        # Get prediction
+        action, _states = self.model.predict(observation, deterministic=deterministic)
+        action_value = action.item() if hasattr(action, 'item') else action
+        
+        # Track action history
+        self.action_history.append(action_value)
+        
+        return action_value
+    
+    def update_reward(self, reward):
+        """Update reward history and performance tracking"""
+        self.reward_history.append(reward)
+        self.performance_metrics['total_rewards'] += reward
+    
+    def _calculate_final_metrics(self):
+        """Calculate comprehensive performance metrics"""
+        if not self.reward_history:
+            return
+        
+        rewards = list(self.reward_history)
+        
+        # Win rate
+        positive_rewards = [r for r in rewards if r > 0]
+        self.performance_metrics['win_rate'] = len(positive_rewards) / len(rewards) if rewards else 0
+        
+        # Sharpe ratio (simplified)
+        if len(rewards) > 1:
+            mean_reward = np.mean(rewards)
+            std_reward = np.std(rewards)
+            self.performance_metrics['sharpe_ratio'] = mean_reward / std_reward if std_reward > 0 else 0
+        
+        # Max drawdown (simplified)
+        cumulative_rewards = np.cumsum(rewards)
+        running_max = np.maximum.accumulate(cumulative_rewards)
+        drawdown = (running_max - cumulative_rewards) / np.maximum(running_max, 1)
+        self.performance_metrics['max_drawdown'] = np.max(drawdown) if len(drawdown) > 0 else 0
+        
+        # Profit factor
+        total_profits = sum(positive_rewards)
+        negative_rewards = [abs(r) for r in rewards if r < 0]
+        total_losses = sum(negative_rewards)
+        self.performance_metrics['profit_factor'] = total_profits / total_losses if total_losses > 0 else float('inf')
+    
+    def get_state_representation(self, market_data, position_data=None):
+        """
+        Create enhanced state representation for RL agent
+        """
+        try:
+            state_features = []
+            
+            # Price-based features
+            df = market_data.get('price_data')
+            if df is not None and not df.empty:
+                # Recent price changes
+                recent_returns = df['close'].pct_change().fillna(0).tail(5).tolist()
+                state_features.extend(recent_returns)
+                
+                # Technical indicators
+                if 'rsi' in df.columns:
+                    state_features.append(df['rsi'].iloc[-1] / 100.0)  # Normalize RSI
+                else:
+                    state_features.append(0.5)  # Default neutral
+                
+                if 'macd' in df.columns:
+                    state_features.append(np.tanh(df['macd'].iloc[-1]))  # Normalize MACD
+                else:
+                    state_features.append(0.0)
+                
+                # Volume features
+                if 'volume' in df.columns:
+                    vol_ratio = df['volume'].iloc[-1] / df['volume'].rolling(20).mean().iloc[-1]
+                    state_features.append(np.tanh(vol_ratio - 1))  # Normalize volume ratio
+                else:
+                    state_features.append(0.0)
+                
+                # Volatility
+                volatility = df['close'].pct_change().rolling(10).std().iloc[-1]
+                state_features.append(np.tanh(volatility * 100))  # Normalize volatility
+            else:
+                # Fallback features if no price data
+                state_features.extend([0.0] * 9)  # 5 returns + 4 indicators
+            
+            # Position features
+            if position_data:
+                state_features.append(1.0 if position_data.get('has_position', False) else 0.0)
+                state_features.append(position_data.get('profit_pct', 0.0))
+                state_features.append(position_data.get('days_held', 0.0) / 30.0)  # Normalize days
+            else:
+                state_features.extend([0.0, 0.0, 0.0])
+            
+            # Market regime features
+            market_sentiment = market_data.get('market_sentiment', 0.0)
+            state_features.append(np.tanh(market_sentiment))
+            
+            # News sentiment if available
+            news_sentiment = market_data.get('news_sentiment', {}).get('compound', 0.0)
+            state_features.append(news_sentiment)
+            
+            # Ensure fixed size state (pad or truncate if necessary)
+            target_size = 14
+            if len(state_features) < target_size:
+                state_features.extend([0.0] * (target_size - len(state_features)))
+            elif len(state_features) > target_size:
+                state_features = state_features[:target_size]
+            
+            return np.array(state_features, dtype=np.float32)
+            
+        except Exception as e:
+            print(f"❌ [RL Agent] Error creating state representation: {e}")
+            # Return default neutral state
+            return np.zeros(14, dtype=np.float32)
+    
+    def calculate_enhanced_reward(self, action, market_data, position_data, price_change):
+        """
+        Calculate enhanced reward function with multiple factors
+        """
+        try:
+            reward = 0.0
+            
+            # Base reward from price change
+            if action == 1:  # BUY
+                reward += price_change * 10  # Amplify reward
+            elif action == 2:  # SELL
+                reward -= price_change * 10  # Reward short positions
+            # HOLD (action == 0) gets small penalty for inaction in trending markets
+            
+            # Risk-adjusted reward
+            volatility = market_data.get('volatility', 0.01)
+            if volatility > 0:
+                reward = reward / (1 + volatility)  # Penalize high volatility trades
+            
+            # Position holding penalty/reward
+            if position_data and position_data.get('has_position', False):
+                days_held = position_data.get('days_held', 0)
+                if days_held > 7:  # Penalize holding too long
+                    reward -= 0.1 * (days_held - 7)
+                elif days_held > 0:  # Small reward for patience
+                    reward += 0.05
+            
+            # News sentiment alignment reward
+            news_sentiment = market_data.get('news_sentiment', {}).get('compound', 0.0)
+            if abs(news_sentiment) > 0.3:  # Strong news sentiment
+                if (action == 1 and news_sentiment > 0) or (action == 2 and news_sentiment < 0):
+                    reward += 0.2  # Reward trading with sentiment
+                elif action != 0:  # Penalize trading against strong sentiment
+                    reward -= 0.1
+            
+            # Technical alignment reward
+            df = market_data.get('price_data')
+            if df is not None and 'rsi' in df.columns:
+                rsi = df['rsi'].iloc[-1]
+                if action == 1 and rsi < 40:  # Buy when oversold
+                    reward += 0.1
+                elif action == 2 and rsi > 60:  # Sell when overbought
+                    reward += 0.1
+                elif action != 0 and (rsi < 20 or rsi > 80):  # Penalize extreme trades
+                    reward -= 0.15
+            
+            # Drawdown penalty
+            if position_data and position_data.get('profit_pct', 0) < -0.05:  # More than 5% loss
+                reward -= 0.5
+            
+            # Profit target reward
+            if position_data and position_data.get('profit_pct', 0) > 0.02:  # More than 2% profit
+                reward += 0.3
+            
+            # Update reward history
+            self.update_reward(reward)
+            
+            return reward
+            
+        except Exception as e:
+            print(f"❌ [RL Agent] Error calculating reward: {e}")
+            return 0.0
+
+
+# === ENHANCED RL CALLBACKS ===
+class EnhancedRewardCallback:
+    """Callback to monitor and adjust rewards during training"""
+    
+    def __init__(self, rl_agent):
+        self.rl_agent = rl_agent
+        self.episode_rewards = []
+        self.call_count = 0
+    
+    def __call__(self, locals_dict, globals_dict):
+        """Called during training to monitor rewards"""
+        self.call_count += 1
+        
+        # Monitor rewards every 1000 steps
+        if self.call_count % 1000 == 0:
+            recent_rewards = list(self.rl_agent.reward_history)[-100:] if self.rl_agent.reward_history else []
+            if recent_rewards:
+                avg_reward = np.mean(recent_rewards)
+                print(f"🔄 [Reward Monitor] Step {self.call_count}: Avg reward (last 100): {avg_reward:.4f}")
+        
+        return True  # Continue training
+
+class PerformanceMonitorCallback:
+    """Callback to monitor performance metrics during training"""
+    
+    def __init__(self, rl_agent):
+        self.rl_agent = rl_agent
+        self.call_count = 0
+        self.last_metrics_update = 0
+    
+    def __call__(self, locals_dict, globals_dict):
+        """Called during training to monitor performance"""
+        self.call_count += 1
+        
+        # Update metrics every 5000 steps
+        if self.call_count - self.last_metrics_update >= 5000:
+            self.rl_agent._calculate_final_metrics()
+            metrics = self.rl_agent.performance_metrics
+            
+            print(f"📊 [Performance Monitor] Step {self.call_count}:")
+            print(f"   - Win Rate: {metrics['win_rate']:.2%}")
+            print(f"   - Sharpe Ratio: {metrics['sharpe_ratio']:.3f}")
+            print(f"   - Max Drawdown: {metrics['max_drawdown']:.2%}")
+            
+            self.last_metrics_update = self.call_count
+        
+        return True  # Continue training
 
 
 # === ENHANCED RL EVALUATION ===
@@ -10519,15 +11213,636 @@ class TransferLearningManager:
             transferred_performance = 0.5  # Default performance
             
         return transferred_performance, transfer_weights
-
-class MasterAgentCoordinator:
-    """Hybrid Master Agent with Multi-Agent Architecture"""
     
-    def __init__(self):
-        self.specialist_agents = {}
-        self.communication_matrix = {}
-        self.task_decomposition = {}
-        self.agent_performance = {}
+    def decide_tp_sl_levels(self, symbol, entry_price, direction, market_data):
+        """
+        Enhanced TP/SL decision making based on multi-factor analysis
+        """
+        try:
+            print(f"🎯 [Master Agent] Deciding TP/SL levels for {symbol}")
+            
+            # Gather analysis from specialist agents
+            analysis_results = {}
+            
+            # Get volatility analysis
+            if 'volatility_predictor' in self.specialist_agents:
+                volatility_analysis = self.specialist_agents['volatility_predictor'].analyze(market_data, symbol)
+                analysis_results['volatility'] = volatility_analysis
+            
+            # Get risk analysis
+            if 'risk_manager' in self.specialist_agents:
+                risk_analysis = self.specialist_agents['risk_manager'].analyze(market_data, symbol)
+                analysis_results['risk'] = risk_analysis
+            
+            # Get trend analysis
+            if 'trend_analyzer' in self.specialist_agents:
+                trend_analysis = self.specialist_agents['trend_analyzer'].analyze(market_data, symbol)
+                analysis_results['trend'] = trend_analysis
+            
+            # Calculate ATR-based levels
+            atr_levels = self._calculate_atr_based_levels(symbol, entry_price, market_data)
+            
+            # Calculate support/resistance levels
+            sr_levels = self._calculate_support_resistance_levels(symbol, market_data)
+            
+            # Calculate volatility-adjusted levels
+            volatility_levels = self._calculate_volatility_adjusted_levels(
+                symbol, entry_price, direction, analysis_results.get('volatility')
+            )
+            
+            # Apply intelligent decision logic
+            tp_sl_decision = self._apply_tp_sl_decision_logic(
+                symbol, entry_price, direction, atr_levels, sr_levels, 
+                volatility_levels, analysis_results
+            )
+            
+            # Store decision history
+            self.tp_sl_history[symbol] = {
+                'timestamp': datetime.now(),
+                'entry_price': entry_price,
+                'direction': direction,
+                'decision': tp_sl_decision,
+                'analysis_results': analysis_results
+            }
+            
+            print(f"✅ [Master Agent] TP/SL Decision for {symbol}: TP={tp_sl_decision['take_profit']:.6f}, SL={tp_sl_decision['stop_loss']:.6f}")
+            
+            return tp_sl_decision
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in TP/SL decision: {e}")
+            # Fallback to default levels
+            return self._get_default_tp_sl_levels(entry_price, direction)
+    
+    def _calculate_atr_based_levels(self, symbol, entry_price, market_data):
+        """Calculate TP/SL levels based on ATR"""
+        try:
+            # Get recent price data
+            df = market_data.get('price_data')
+            if df is None or len(df) < 20:
+                return None
+            
+            # Calculate ATR
+            from ta.volatility import AverageTrueRange
+            atr_indicator = AverageTrueRange(df["high"], df["low"], df["close"], window=14)
+            atr_value = atr_indicator.average_true_range().iloc[-1]
+            
+            return {
+                'atr_value': atr_value,
+                'tp_multiplier': 2.0,  # 2x ATR for TP
+                'sl_multiplier': 1.0   # 1x ATR for SL
+            }
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating ATR levels: {e}")
+            return None
+    
+    def _calculate_support_resistance_levels(self, symbol, market_data):
+        """Calculate support and resistance levels"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 50:
+                return None
+            
+            # Find pivot points
+            highs = df['high'].rolling(window=10, center=True).max()
+            lows = df['low'].rolling(window=10, center=True).min()
+            
+            resistance_levels = df[df['high'] == highs]['high'].dropna().tail(5).tolist()
+            support_levels = df[df['low'] == lows]['low'].dropna().tail(5).tolist()
+            
+            return {
+                'resistance_levels': resistance_levels,
+                'support_levels': support_levels
+            }
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating S/R levels: {e}")
+            return None
+    
+    def _calculate_volatility_adjusted_levels(self, symbol, entry_price, direction, volatility_analysis):
+        """Calculate volatility-adjusted TP/SL levels"""
+        try:
+            if not volatility_analysis:
+                return None
+            
+            # Extract volatility metrics
+            volatility_score = volatility_analysis[1] if isinstance(volatility_analysis, tuple) else 0.5
+            
+            # Adjust multipliers based on volatility
+            if volatility_score > 0.7:  # High volatility
+                tp_multiplier = 3.0
+                sl_multiplier = 1.5
+            elif volatility_score > 0.5:  # Medium volatility
+                tp_multiplier = 2.5
+                sl_multiplier = 1.2
+            else:  # Low volatility
+                tp_multiplier = 2.0
+                sl_multiplier = 1.0
+            
+            return {
+                'volatility_score': volatility_score,
+                'tp_multiplier': tp_multiplier,
+                'sl_multiplier': sl_multiplier
+            }
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating volatility levels: {e}")
+            return None
+    
+    def _apply_tp_sl_decision_logic(self, symbol, entry_price, direction, atr_levels, 
+                                   sr_levels, volatility_levels, analysis_results):
+        """Apply intelligent decision logic for TP/SL"""
+        try:
+            # Base calculations
+            base_tp_multiplier = 2.0
+            base_sl_multiplier = 1.0
+            
+            # Adjust based on ATR
+            if atr_levels:
+                atr_value = atr_levels['atr_value']
+                base_tp_distance = atr_value * atr_levels['tp_multiplier']
+                base_sl_distance = atr_value * atr_levels['sl_multiplier']
+            else:
+                # Fallback to percentage-based
+                base_tp_distance = entry_price * 0.02  # 2%
+                base_sl_distance = entry_price * 0.01  # 1%
+            
+            # Adjust based on volatility
+            if volatility_levels:
+                vol_tp_multiplier = volatility_levels['tp_multiplier']
+                vol_sl_multiplier = volatility_levels['sl_multiplier']
+                base_tp_distance *= (vol_tp_multiplier / 2.0)
+                base_sl_distance *= (vol_sl_multiplier / 1.0)
+            
+            # Adjust based on trend strength
+            trend_adjustment = 1.0
+            if analysis_results.get('trend'):
+                trend_confidence = analysis_results['trend'][1] if isinstance(analysis_results['trend'], tuple) else 0.5
+                if trend_confidence > 0.7:
+                    trend_adjustment = 1.2  # Increase TP in strong trends
+                elif trend_confidence < 0.3:
+                    trend_adjustment = 0.8  # Decrease TP in weak trends
+            
+            base_tp_distance *= trend_adjustment
+            
+            # Calculate final levels
+            if direction.upper() == 'BUY':
+                take_profit = entry_price + base_tp_distance
+                stop_loss = entry_price - base_sl_distance
+            else:  # SELL
+                take_profit = entry_price - base_tp_distance
+                stop_loss = entry_price + base_sl_distance
+            
+            # Adjust based on support/resistance levels
+            if sr_levels:
+                if direction.upper() == 'BUY':
+                    # Adjust TP to nearest resistance
+                    nearby_resistance = [r for r in sr_levels['resistance_levels'] if r > entry_price]
+                    if nearby_resistance:
+                        closest_resistance = min(nearby_resistance)
+                        if closest_resistance < take_profit:
+                            take_profit = closest_resistance * 0.99  # Slightly below resistance
+                    
+                    # Adjust SL to nearest support
+                    nearby_support = [s for s in sr_levels['support_levels'] if s < entry_price]
+                    if nearby_support:
+                        closest_support = max(nearby_support)
+                        if closest_support > stop_loss:
+                            stop_loss = closest_support * 1.01  # Slightly above support
+                else:  # SELL
+                    # Adjust TP to nearest support
+                    nearby_support = [s for s in sr_levels['support_levels'] if s < entry_price]
+                    if nearby_support:
+                        closest_support = max(nearby_support)
+                        if closest_support > take_profit:
+                            take_profit = closest_support * 1.01  # Slightly above support
+                    
+                    # Adjust SL to nearest resistance
+                    nearby_resistance = [r for r in sr_levels['resistance_levels'] if r > entry_price]
+                    if nearby_resistance:
+                        closest_resistance = min(nearby_resistance)
+                        if closest_resistance < stop_loss:
+                            stop_loss = closest_resistance * 0.99  # Slightly below resistance
+            
+            return {
+                'take_profit': take_profit,
+                'stop_loss': stop_loss,
+                'tp_distance': abs(take_profit - entry_price),
+                'sl_distance': abs(stop_loss - entry_price),
+                'risk_reward_ratio': abs(take_profit - entry_price) / abs(stop_loss - entry_price),
+                'reasoning': {
+                    'atr_based': atr_levels is not None,
+                    'volatility_adjusted': volatility_levels is not None,
+                    'trend_adjusted': trend_adjustment != 1.0,
+                    'sr_adjusted': sr_levels is not None
+                }
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in TP/SL decision logic: {e}")
+            return self._get_default_tp_sl_levels(entry_price, direction)
+    
+    def _get_default_tp_sl_levels(self, entry_price, direction):
+        """Get default TP/SL levels as fallback"""
+        if direction.upper() == 'BUY':
+            return {
+                'take_profit': entry_price * 1.02,  # 2% profit
+                'stop_loss': entry_price * 0.99,    # 1% loss
+                'tp_distance': entry_price * 0.02,
+                'sl_distance': entry_price * 0.01,
+                'risk_reward_ratio': 2.0,
+                'reasoning': {'default_fallback': True}
+            }
+        else:
+            return {
+                'take_profit': entry_price * 0.98,  # 2% profit
+                'stop_loss': entry_price * 1.01,    # 1% loss
+                'tp_distance': entry_price * 0.02,
+                'sl_distance': entry_price * 0.01,
+                'risk_reward_ratio': 2.0,
+                'reasoning': {'default_fallback': True}
+            }
+    
+    def decide_trailing_stop_activation(self, symbol, current_price, entry_price, direction, market_data):
+        """
+        Decide when to activate trailing stop based on market conditions
+        """
+        try:
+            print(f"🎯 [Master Agent] Analyzing trailing stop activation for {symbol}")
+            
+            # Calculate current profit
+            if direction.upper() == 'BUY':
+                profit_pct = (current_price - entry_price) / entry_price
+            else:
+                profit_pct = (entry_price - current_price) / entry_price
+            
+            # Get analysis from specialist agents
+            analysis_results = {}
+            
+            if 'trend_analyzer' in self.specialist_agents:
+                trend_analysis = self.specialist_agents['trend_analyzer'].analyze(market_data, symbol)
+                analysis_results['trend'] = trend_analysis
+            
+            if 'volatility_predictor' in self.specialist_agents:
+                volatility_analysis = self.specialist_agents['volatility_predictor'].analyze(market_data, symbol)
+                analysis_results['volatility'] = volatility_analysis
+            
+            # Decision logic
+            should_activate = False
+            activation_reason = []
+            
+            # Rule 1: Activate if profit exceeds 1.5%
+            if profit_pct > 0.015:
+                should_activate = True
+                activation_reason.append("Profit threshold reached (>1.5%)")
+            
+            # Rule 2: Strong trend continuation
+            if analysis_results.get('trend'):
+                trend_signal, trend_confidence = analysis_results['trend']
+                if trend_confidence > 0.7 and profit_pct > 0.01:
+                    should_activate = True
+                    activation_reason.append(f"Strong trend continuation ({trend_confidence:.2%})")
+            
+            # Rule 3: High volatility environment - be more conservative
+            if analysis_results.get('volatility'):
+                volatility_score = analysis_results['volatility'][1] if isinstance(analysis_results['volatility'], tuple) else 0.5
+                if volatility_score > 0.8 and profit_pct > 0.02:
+                    should_activate = True
+                    activation_reason.append("High volatility - protective trailing")
+            
+            # Store decision
+            self.trailing_stop_decisions[symbol] = {
+                'timestamp': datetime.now(),
+                'should_activate': should_activate,
+                'current_profit_pct': profit_pct,
+                'reasons': activation_reason,
+                'analysis_results': analysis_results
+            }
+            
+            print(f"✅ [Master Agent] Trailing stop decision for {symbol}: {'ACTIVATE' if should_activate else 'HOLD'}")
+            if activation_reason:
+                print(f"   Reasons: {', '.join(activation_reason)}")
+            
+            return {
+                'should_activate': should_activate,
+                'reasons': activation_reason,
+                'current_profit_pct': profit_pct,
+                'recommended_distance': self._calculate_trailing_distance(symbol, current_price, volatility_analysis)
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in trailing stop decision: {e}")
+            return {'should_activate': False, 'reasons': ['Error in analysis'], 'current_profit_pct': 0}
+    
+    def _calculate_trailing_distance(self, symbol, current_price, volatility_analysis):
+        """Calculate optimal trailing stop distance"""
+        try:
+            base_distance = current_price * 0.01  # 1% base
+            
+            if volatility_analysis:
+                volatility_score = volatility_analysis[1] if isinstance(volatility_analysis, tuple) else 0.5
+                # Higher volatility = larger trailing distance
+                volatility_multiplier = 1 + volatility_score
+                base_distance *= volatility_multiplier
+            
+            return base_distance
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating trailing distance: {e}")
+            return current_price * 0.01
+    
+    def analyze_optimal_entry_point(self, symbol, signal_direction, market_data):
+        """
+        Analyze and determine optimal entry points using multi-factor analysis
+        """
+        try:
+            print(f"🎯 [Master Agent] Analyzing optimal entry point for {symbol}")
+            
+            # Get current price
+            current_price = market_data.get('current_price')
+            if not current_price:
+                df = market_data.get('price_data')
+                if df is not None and not df.empty:
+                    current_price = df['close'].iloc[-1]
+                else:
+                    print(f"❌ [Master Agent] No price data available for {symbol}")
+                    return None
+            
+            # Gather comprehensive analysis
+            analysis_results = {}
+            
+            # Technical analysis
+            technical_score = self._analyze_technical_entry_conditions(symbol, market_data)
+            analysis_results['technical'] = technical_score
+            
+            # Volume analysis
+            volume_score = self._analyze_volume_conditions(symbol, market_data)
+            analysis_results['volume'] = volume_score
+            
+            # Market structure analysis
+            structure_score = self._analyze_market_structure(symbol, market_data)
+            analysis_results['structure'] = structure_score
+            
+            # Volatility timing analysis
+            volatility_score = self._analyze_volatility_timing(symbol, market_data)
+            analysis_results['volatility'] = volatility_score
+            
+            # News sentiment timing
+            news_score = self._analyze_news_timing(symbol, market_data)
+            analysis_results['news'] = news_score
+            
+            # Calculate composite entry score
+            entry_analysis = self._calculate_entry_score(
+                signal_direction, analysis_results, current_price
+            )
+            
+            # Store analysis
+            self.entry_point_analysis[symbol] = {
+                'timestamp': datetime.now(),
+                'signal_direction': signal_direction,
+                'current_price': current_price,
+                'analysis_results': analysis_results,
+                'entry_decision': entry_analysis
+            }
+            
+            print(f"✅ [Master Agent] Entry analysis for {symbol}: Score={entry_analysis['composite_score']:.2f}, Recommendation={entry_analysis['recommendation']}")
+            
+            return entry_analysis
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in entry point analysis: {e}")
+            return {
+                'recommendation': 'WAIT',
+                'composite_score': 0.5,
+                'reasoning': ['Error in analysis'],
+                'optimal_price': current_price
+            }
+    
+    def _analyze_technical_entry_conditions(self, symbol, market_data):
+        """Analyze technical conditions for entry"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 50:
+                return 0.5
+            
+            score = 0.0
+            factors = 0
+            
+            # RSI conditions
+            if 'rsi' in df.columns:
+                rsi = df['rsi'].iloc[-1]
+                if 30 <= rsi <= 70:  # Not overbought/oversold
+                    score += 0.8
+                elif 20 <= rsi <= 80:
+                    score += 0.6
+                else:
+                    score += 0.3
+                factors += 1
+            
+            # MACD conditions
+            if 'macd' in df.columns and 'macd_signal' in df.columns:
+                macd = df['macd'].iloc[-1]
+                macd_signal = df['macd_signal'].iloc[-1]
+                macd_prev = df['macd'].iloc[-2]
+                macd_signal_prev = df['macd_signal'].iloc[-2]
+                
+                # Check for MACD crossover
+                if (macd > macd_signal and macd_prev <= macd_signal_prev):  # Bullish crossover
+                    score += 0.9
+                elif (macd < macd_signal and macd_prev >= macd_signal_prev):  # Bearish crossover
+                    score += 0.9
+                elif macd > macd_signal:  # Above signal line
+                    score += 0.6
+                else:
+                    score += 0.4
+                factors += 1
+            
+            # Moving average alignment
+            if 'ema_20' in df.columns and 'ema_50' in df.columns:
+                ema20 = df['ema_20'].iloc[-1]
+                ema50 = df['ema_50'].iloc[-1]
+                current_price = df['close'].iloc[-1]
+                
+                if ema20 > ema50 and current_price > ema20:  # Bullish alignment
+                    score += 0.8
+                elif ema20 < ema50 and current_price < ema20:  # Bearish alignment
+                    score += 0.8
+                else:
+                    score += 0.5
+                factors += 1
+            
+            return score / max(factors, 1)
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in technical analysis: {e}")
+            return 0.5
+    
+    def _analyze_volume_conditions(self, symbol, market_data):
+        """Analyze volume conditions for entry timing"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or 'volume' not in df.columns or len(df) < 20:
+                return 0.5
+            
+            current_volume = df['volume'].iloc[-1]
+            avg_volume = df['volume'].rolling(20).mean().iloc[-1]
+            
+            volume_ratio = current_volume / avg_volume
+            
+            # Higher volume = better entry conditions
+            if volume_ratio > 1.5:
+                return 0.9
+            elif volume_ratio > 1.2:
+                return 0.8
+            elif volume_ratio > 0.8:
+                return 0.6
+            else:
+                return 0.4
+                
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in volume analysis: {e}")
+            return 0.5
+    
+    def _analyze_market_structure(self, symbol, market_data):
+        """Analyze market structure for entry timing"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 30:
+                return 0.5
+            
+            # Look for pullbacks in trends
+            recent_highs = df['high'].rolling(10).max()
+            recent_lows = df['low'].rolling(10).min()
+            current_price = df['close'].iloc[-1]
+            
+            # Check if price is near support/resistance
+            resistance_distance = abs(current_price - recent_highs.iloc[-1]) / current_price
+            support_distance = abs(current_price - recent_lows.iloc[-1]) / current_price
+            
+            # Closer to support/resistance = better entry
+            min_distance = min(resistance_distance, support_distance)
+            
+            if min_distance < 0.01:  # Within 1%
+                return 0.9
+            elif min_distance < 0.02:  # Within 2%
+                return 0.7
+            elif min_distance < 0.05:  # Within 5%
+                return 0.6
+            else:
+                return 0.4
+                
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in structure analysis: {e}")
+            return 0.5
+    
+    def _analyze_volatility_timing(self, symbol, market_data):
+        """Analyze volatility for entry timing"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 20:
+                return 0.5
+            
+            # Calculate recent volatility
+            returns = df['close'].pct_change().dropna()
+            current_vol = returns.rolling(10).std().iloc[-1]
+            avg_vol = returns.rolling(20).std().mean()
+            
+            vol_ratio = current_vol / avg_vol
+            
+            # Moderate volatility is better for entries
+            if 0.8 <= vol_ratio <= 1.2:
+                return 0.9
+            elif 0.6 <= vol_ratio <= 1.5:
+                return 0.7
+            else:
+                return 0.5
+                
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in volatility timing: {e}")
+            return 0.5
+    
+    def _analyze_news_timing(self, symbol, market_data):
+        """Analyze news sentiment timing"""
+        try:
+            # Check if news analysis is available
+            news_sentiment = market_data.get('news_sentiment')
+            if not news_sentiment:
+                return 0.6  # Neutral when no news
+            
+            sentiment_score = news_sentiment.get('compound', 0)
+            
+            # Convert sentiment to entry timing score
+            if abs(sentiment_score) > 0.5:  # Strong sentiment
+                return 0.8
+            elif abs(sentiment_score) > 0.2:  # Moderate sentiment
+                return 0.7
+            else:  # Neutral sentiment
+                return 0.6
+                
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in news timing: {e}")
+            return 0.6
+    
+    def _calculate_entry_score(self, signal_direction, analysis_results, current_price):
+        """Calculate composite entry score and recommendation"""
+        try:
+            # Weighted scoring
+            weights = {
+                'technical': 0.3,
+                'volume': 0.2,
+                'structure': 0.25,
+                'volatility': 0.15,
+                'news': 0.1
+            }
+            
+            composite_score = 0.0
+            total_weight = 0.0
+            
+            for factor, score in analysis_results.items():
+                if factor in weights:
+                    composite_score += score * weights[factor]
+                    total_weight += weights[factor]
+            
+            if total_weight > 0:
+                composite_score = composite_score / total_weight
+            else:
+                composite_score = 0.5
+            
+            # Determine recommendation
+            if composite_score >= 0.8:
+                recommendation = 'ENTER_NOW'
+                reasoning = ['Excellent entry conditions']
+            elif composite_score >= 0.7:
+                recommendation = 'ENTER_SOON'
+                reasoning = ['Good entry conditions']
+            elif composite_score >= 0.6:
+                recommendation = 'WAIT_FOR_BETTER'
+                reasoning = ['Moderate conditions - wait for improvement']
+            else:
+                recommendation = 'AVOID'
+                reasoning = ['Poor entry conditions']
+            
+            # Add specific reasoning
+            for factor, score in analysis_results.items():
+                if score >= 0.8:
+                    reasoning.append(f'Strong {factor} signal')
+                elif score <= 0.4:
+                    reasoning.append(f'Weak {factor} signal')
+            
+            return {
+                'composite_score': composite_score,
+                'recommendation': recommendation,
+                'reasoning': reasoning,
+                'optimal_price': current_price,
+                'factor_scores': analysis_results
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating entry score: {e}")
+            return {
+                'composite_score': 0.5,
+                'recommendation': 'WAIT',
+                'reasoning': ['Error in calculation'],
+                'optimal_price': current_price
+            }
         
     def initialize_specialist_agents(self):
         """Khởi tạo all specialist agents"""
@@ -11376,6 +12691,17 @@ class EnhancedTradingBot:
             print("📰 [Bot Init] Initializing News Manager...")
             self.news_manager = NewsEconomicManager()  # News manager instance
             print(" [Bot Init] News Manager initialized successfully")
+            
+            # Initialize Daily News Scheduler
+            print("📅 [Bot Init] Initializing Daily News Scheduler...")
+            self.news_scheduler = DailyNewsScheduler(
+                news_manager=self.news_manager,
+                symbols_to_track=SYMBOLS[:5] if len(SYMBOLS) > 5 else SYMBOLS  # Track first 5 symbols
+            )
+            # Start the scheduler
+            self.news_scheduler.start_scheduler()
+            print(" [Bot Init] Daily News Scheduler initialized and started")
+            
         except Exception as e:
             print(f" [Bot Init] Failed to initialize News Manager: {e}")
             print(f" [Bot Init] Error type: {type(e).__name__}")
@@ -11383,6 +12709,7 @@ class EnhancedTradingBot:
             traceback.print_exc()
             print("⚠️ [Bot Init] Setting news_manager to None and continuing...")
             self.news_manager = None
+            self.news_scheduler = None
         
         # Initialize data_manager with news_manager reference
         print("📊 [Bot Init] Initializing Data Manager...")
@@ -13516,6 +14843,15 @@ class EnhancedTradingBot:
                 logging.info(f"[RL Strategy] RL Agent d training trn: {symbols_agent_knows}")
                 logging.info(f"[RL Strategy] Active symbols: {list(self.active_symbols)}")
                 logging.info(f"[RL Strategy] Symbols not fromrong RL Agent: {list(self.active_symbols - set(symbols_agent_knows))}")
+                
+                # FIXED: If RL Agent only knows limited symbols, expand to all active symbols
+                # This ensures Online Learning works for all symbols
+                missing_symbols = list(self.active_symbols - set(symbols_agent_knows))
+                if missing_symbols:
+                    logger.warning(f"⚠️ [RL Strategy] RL Agent missing symbols: {missing_symbols}")
+                    logger.warning(f"⚠️ [RL Strategy] Expanding symbols_agent_knows to include all active symbols for Online Learning")
+                    symbols_agent_knows = list(set(symbols_agent_knows + missing_symbols))
+                    logger.info(f"✅ [RL Strategy] Expanded symbols_agent_knows: {symbols_agent_knows}")
 
 
             if not symbols_agent_knows:
@@ -13720,84 +15056,167 @@ class EnhancedTradingBot:
             logger.debug("[RL Strategy] Starting from RL Agent action")
             
             tasks = []
-            for i, action_code in enumerate(action_vector):
-                if i < len(symbols_agent_knows):
-                    symbol_to_act = symbols_agent_knows[i]
+            # Get original RL symbols count to know which symbols have actual RL actions
+            original_rl_symbols = len(action_vector) if action_vector is not None else 0
+            
+            for i, symbol_to_act in enumerate(symbols_agent_knows):
+                # For symbols beyond original RL model, use HOLD action (0) with medium confidence
+                if i < original_rl_symbols:
+                    action_code = action_vector[i]
                     confidence = live_confidences.get(symbol_to_act, 0.5)
-                    has_position = symbol_to_act in self.open_positions
+                else:
+                    # Symbols added for Online Learning - use HOLD action but still process through Online Learning
+                    action_code = 0  # HOLD
+                    confidence = 0.5  # Medium confidence
+                    logger.info(f"🔄 [Online Learning] Processing {symbol_to_act} (not in original RL model) with Online Learning")
+                
+                has_position = symbol_to_act in self.open_positions
+                
+                logger.debug(f" [RL Strategy] processing {symbol_to_act}: action={action_code}, conf={confidence:.2%}, has_pos={has_position}")
+                
+                # NEW LOGIC: Check validitya action with position current
+                if action_code in [1, 2] and has_position:
+                    current_pos = self.open_positions[symbol_to_act]
+                    current_signal = current_pos['signal']
                     
-                    logger.debug(f" [RL Strategy] processing {symbol_to_act}: action={action_code}, conf={confidence:.2%}, has_pos={has_position}")
+                    # Check xem action fromri ngu c with position current not
+                    is_contradictory = (action_code == 1 and current_signal == 'SELL') or (action_code == 2 and current_signal == 'BUY')
                     
-                    # NEW LOGIC: Check validitya action with position current
-                    if action_code in [1, 2] and has_position:
-                        current_pos = self.open_positions[symbol_to_act]
-                        current_signal = current_pos['signal']
+                    if is_contradictory:
+                        logger.warning(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
+                        print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
                         
-                        # Check xem action fromri ngu c with position current not
-                        is_contradictory = (action_code == 1 and current_signal == 'SELL') or (action_code == 2 and current_signal == 'BUY')
+                        # nhn d liu RL model needs retrain do logic not used
+                        if not hasattr(self, 'rl_integrity_issues'):
+                            self.rl_integrity_issues = 0
+                        self.rl_integrity_issues += 1
                         
-                        if is_contradictory:
-                            logger.warning(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
-                            print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
-                            
-                            # nhn d liu RL model needs retrain do logic not used
-                            if not hasattr(self, 'rl_integrity_issues'):
-                                self.rl_integrity_issues = 0
-                            self.rl_integrity_issues += 1
-                            
-                            if self.rl_integrity_issues >= 3:  # Sau 3 l n vi ph m
-                                logger.error(f"⚠️ [RL Integrity] Detected {self.rl_integrity_issues} times RL agent made contradictory decisions!")
-                                print(f"   [RL Integrity] Detected {self.rl_integrity_issues} times RL agenfrom modelade contradictory decisions!")
-                                print(f"   [RL Integrity] Recommended to retrain RL model to fix logic.")
-                                self.rl_integrity_issues = 0  # Reset counter
-                            
-                            continue
-                        else:
-                            logger.info(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
-                            print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
-                            continue
+                        if self.rl_integrity_issues >= 3:  # Sau 3 l n vi ph m
+                            logger.error(f"⚠️ [RL Integrity] Detected {self.rl_integrity_issues} times RL agent made contradictory decisions!")
+                            print(f"   [RL Integrity] Detected {self.rl_integrity_issues} times RL agenfrom modelade contradictory decisions!")
+                            print(f"   [RL Integrity] Recommended to retrain RL model to fix logic.")
+                            self.rl_integrity_issues = 0  # Reset counter
+                        
+                        continue
+                    else:
+                        logger.info(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
+                        print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
+                        continue
+                
+                # processing symbols c RL action BUY/SELL v not c position
+                print(f"   [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
+                logger.info(f" [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
+                logger.info(f" [Debug] Active symbols: {list(self.active_symbols)}")
+                
+                # Process all symbols through Online Learning (including HOLD actions)
+                if symbol_to_act in self.active_symbols:
+                    # Always process through Online Learning for all active symbols
+                    symbol_data = live_data_cache.get(symbol_to_act, pd.DataFrame())
                     
-                        # processing symbols c RL action BUY/SELL v not c position
-                    print(f"   [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
-                    logger.info(f" [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
-                    logger.info(f" [Debug] Active symbols: {list(self.active_symbols)}")
-                    if action_code in [1, 2] and symbol_to_act in self.active_symbols and not has_position:
-                        print(f"   [Debug] {symbol_to_act}: conditions met, starting Master Agent processing")
-                        # Enhanced action decoding with market regime
-                        market_regime, regime_confidence = self.market_regime_detector.detect_regime(live_data_cache.get(symbol_to_act, pd.DataFrame()))
+                    # Get Online Learning prediction for this symbol
+                    online_decision, online_confidence = self.auto_retrain_manager.online_learning.get_online_prediction_enhanced(
+                        symbol_to_act, symbol_data
+                    )
+                    
+                    logger.info(f"🔄 [Online Learning] {symbol_to_act}: Decision={online_decision}, Confidence={online_confidence:.2%}")
+                    print(f"   [Online Learning] {symbol_to_act}: Decision={online_decision}, Confidence={online_confidence:.2%}")
+                
+                # Only proceed with full analysis for BUY/SELL actions without existing positions
+                if action_code in [1, 2] and symbol_to_act in self.active_symbols and not has_position:
+                    print(f"   [Debug] {symbol_to_act}: conditions met, starting Master Agent processing")
+                    # Enhanced action decoding with market regime
+                    market_regime, regime_confidence = self.market_regime_detector.detect_regime(live_data_cache.get(symbol_to_act, pd.DataFrame()))
+                    
+                    # Calculate volatility for dynamic action space
+                    symbol_data = live_data_cache.get(symbol_to_act, pd.DataFrame())
+                    volatility = symbol_data['close'].pct_change().std() * 100 if len(symbol_data) > 0 else 2.0
+                    
+                    # Get dynamic action space
+                    available_actions = self.dynamic_action_space.get_action_space(symbol_to_act, market_regime, volatility)
+                    
+                    # Decode action with enhanced logic
+                    action_name, confidence_multiplier = self.dynamic_action_space.decode_action(action_code, symbol_to_act, market_regime)
+                    
+                    # Apply adaptive confidence threshold
+                    adaptive_threshold = self.rl_performance_tracker.get_adaptive_threshold(symbol_to_act)
+                    adjusted_confidence = confidence * confidence_multiplier
+                    
+                    # Apply Transfer Learning
+                    source_symbols = [s for s in self.active_symbols if s != symbol_to_act]
+                    if source_symbols:
+                        source_performance = {s: self.rl_performance_tracker.symbol_performance.get(s, {}).get('successful_actions', 0) / max(1, self.rl_performance_tracker.symbol_performance.get(s, {}).get('total_actions', 1)) for s in source_symbols}
+                        transferred_performance, transfer_weights = self.transfer_learning_manager.transfer_knowledge(symbol_to_act, source_symbols, source_performance)
                         
-                        # Calculate volatility for dynamic action space
-                        symbol_data = live_data_cache.get(symbol_to_act, pd.DataFrame())
-                        volatility = symbol_data['close'].pct_change().std() * 100 if len(symbol_data) > 0 else 2.0
-                        
-                        # Get dynamic action space
-                        available_actions = self.dynamic_action_space.get_action_space(symbol_to_act, market_regime, volatility)
-                        
-                        # Decode action with enhanced logic
-                        action_name, confidence_multiplier = self.dynamic_action_space.decode_action(action_code, symbol_to_act, market_regime)
-                        
-                        # Apply adaptive confidence threshold
-                        adaptive_threshold = self.rl_performance_tracker.get_adaptive_threshold(symbol_to_act)
-                        adjusted_confidence = confidence * confidence_multiplier
-                        
-                        # Apply Transfer Learning
-                        source_symbols = [s for s in self.active_symbols if s != symbol_to_act]
-                        if source_symbols:
-                            source_performance = {s: self.rl_performance_tracker.symbol_performance.get(s, {}).get('successful_actions', 0) / max(1, self.rl_performance_tracker.symbol_performance.get(s, {}).get('total_actions', 1)) for s in source_symbols}
-                            transferred_performance, transfer_weights = self.transfer_learning_manager.transfer_knowledge(symbol_to_act, source_symbols, source_performance)
-                            
-                            # Adjust confidence based on transferred knowledge
-                            transfer_multiplier = 1.0 + (transferred_performance - 0.5) * 0.2  # 10% adjustment
-                            adjusted_confidence *= transfer_multiplier
-                        
-                        # Apply Master Agent Coordination
+                        # Adjust confidence based on transferred knowledge
+                        transfer_multiplier = 1.0 + (transferred_performance - 0.5) * 0.2  # 10% adjustment
+                        adjusted_confidence *= transfer_multiplier
+                    
+                    # Apply Master Agent Coordination
+                    logger.info(f" [Master Agent] Starting analysis for {symbol_to_act}")
+                    print(f"   [Master Agent] Starting analysis for {symbol_to_act}")
+                    print(f"   [Debug] Master Agent Coordinator: {self.master_agent_coordinator}")
+                    
+                    try:
+                        master_decision, master_confidence = self.master_agent_coordinator.coordinate_decision(
+                            'trading_decision', symbol_data, symbol_to_act
+                        )
+                        logger.info(f" [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
+                        print(f"   [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
+                    except Exception as e:
+                        logger.error(f"[Master Agent] Error analyzing {symbol_to_act}: {e}")
+                        print(f"   [Master Agent] Error analyzing {symbol_to_act}: {e}")
+                        master_decision, master_confidence = "HOLD", 0.5
+                    
+                    # Apply Advanced Ensemble Prediction
+                    ensemble_decision, ensemble_confidence = self.ensemble_manager.predict_ensemble(
+                        symbol_data, symbol_to_act
+                    )
+                    
+                    # Combine RL, Master Agent, Ensemble, v Online Learning decisions
+                    final_decision, final_confidence = self._combine_all_decisions_with_online_learning(
+                        action_name, adjusted_confidence,
+                        master_decision, master_confidence,
+                        ensemble_decision, ensemble_confidence,
+                        online_decision, online_confidence,
+                        symbol_to_act
+                    )
+                    
+                    logger.info(f" [RL Strategy] Enhanced decision for {symbol_to_act}:")
+                    logger.info(f"   - RL Action: {action_name} (confidence: {adjusted_confidence:.2%})")
+                    logger.info(f"   - Master Agent: {master_decision} (confidence: {master_confidence:.2%})")
+                    logger.info(f"   - Ensemble: {ensemble_decision} (confidence: {ensemble_confidence:.2%})")
+                    logger.info(f"   - Online Learning: {online_decision} (confidence: {online_confidence:.2%})")
+                    logger.info(f"   - Final Decision: {final_decision} (confidence: {final_confidence:.2%})")
+                    logger.info(f"   - Market Regime: {market_regime} (confidence: {regime_confidence:.2%})")
+                    logger.info(f"   - Volatility: {volatility:.2f}%")
+                    logger.info(f"   - Available Actions: {available_actions}")
+                    logger.info(f"   - Adaptive Threshold: {adaptive_threshold:.2%}")
+                    if source_symbols:
+                        logger.info(f"   - Transfer Learning: {transferred_performance:.2%} from {len(source_symbols)} symbols")
+                    
+                    # Check confidence threshold
+                    if final_confidence >= adaptive_threshold and symbol_to_act not in self.open_positions:
+                        logger.info(f"[RL Strategy] Creating task: {final_decision} {symbol_to_act} with confidence {final_confidence:.2%}")
+                        tasks.append(self.handle_position_logic(symbol_to_act, final_decision, final_confidence))
+                    elif final_confidence >= adaptive_threshold and symbol_to_act in self.open_positions:
+                        logger.info(f"[RL Strategy] Skipping {symbol_to_act}: Already has open position")
+                    else:
+                        logger.info(f" [RL Strategy] {symbol_to_act}: Final Confidence {final_confidence:.2%} < Threshold {adaptive_threshold:.2%}")
+                    
+                    # Trigger online learning feedback loop
+                    self._trigger_online_learning_feedback_enhanced(symbol_to_act, final_decision, final_confidence, market_data=symbol_data)
+                
+                # processing symbols c confidence cao nhung RL action = HOLD (fallback analysis)
+                elif action_code == 0 and symbol_to_act in self.active_symbols and symbol_to_act not in self.open_positions:
+                    if confidence > 0.52:  # Confidence threshold cho fallback analysis
+                        print(f"   [Debug] {symbol_to_act}: RL=HOLD nhung confidence cao, starting Master Agent processing")
                         logger.info(f" [Master Agent] Starting analysis for {symbol_to_act}")
                         print(f"   [Master Agent] Starting analysis for {symbol_to_act}")
                         print(f"   [Debug] Master Agent Coordinator: {self.master_agent_coordinator}")
                         
                         try:
                             master_decision, master_confidence = self.master_agent_coordinator.coordinate_decision(
-                                'trading_decision', symbol_data, symbol_to_act
+                                'trading_decision', live_data_cache.get(symbol_to_act, pd.DataFrame()), symbol_to_act
                             )
                             logger.info(f" [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
                             print(f"   [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
@@ -13805,64 +15224,6 @@ class EnhancedTradingBot:
                             logger.error(f"[Master Agent] Error analyzing {symbol_to_act}: {e}")
                             print(f"   [Master Agent] Error analyzing {symbol_to_act}: {e}")
                             master_decision, master_confidence = "HOLD", 0.5
-                        
-                        # Apply Advanced Ensemble Prediction
-                        ensemble_decision, ensemble_confidence = self.ensemble_manager.predict_ensemble(
-                            symbol_data, symbol_to_act
-                        )
-                        
-                        # ONLINE LEARNING INTEGRATION: L y prediction tonline learning model
-                        online_decision, online_confidence = self.auto_retrain_manager.online_learning.get_online_prediction_enhanced(
-                            symbol_to_act, symbol_data
-                        )
-                        
-                        # Combine RL, Master Agent, Ensemble, v Online Learning decisions
-                        final_decision, final_confidence = self._combine_all_decisions_with_online_learning(
-                            action_name, adjusted_confidence,
-                            master_decision, master_confidence,
-                            ensemble_decision, ensemble_confidence,
-                            online_decision, online_confidence,
-                            symbol_to_act
-                        )
-                        
-                        logger.info(f" [RL Strategy] Enhanced decision for {symbol_to_act}:")
-                        logger.info(f"   - RL Action: {action_name} (confidence: {adjusted_confidence:.2%})")
-                        logger.info(f"   - Master Agent: {master_decision} (confidence: {master_confidence:.2%})")
-                        logger.info(f"   - Ensemble: {ensemble_decision} (confidence: {ensemble_confidence:.2%})")
-                        logger.info(f"   - Final Decision: {final_decision} (confidence: {final_confidence:.2%})")
-                        logger.info(f"   - Market Regime: {market_regime} (confidence: {regime_confidence:.2%})")
-                        logger.info(f"   - Volatility: {volatility:.2f}%")
-                        logger.info(f"   - Available Actions: {available_actions}")
-                        logger.info(f"   - Adaptive Threshold: {adaptive_threshold:.2%}")
-                        if source_symbols:
-                            logger.info(f"   - Transfer Learning: {transferred_performance:.2%} from {len(source_symbols)} symbols")
-                        
-                        if final_confidence >= adaptive_threshold and symbol_to_act not in self.open_positions:
-                            logger.info(f"[RL Strategy] Creating task: {final_decision} {symbol_to_act} with confidence {final_confidence:.2%}")
-                            tasks.append(self.handle_position_logic(symbol_to_act, final_decision, final_confidence))
-                        elif final_confidence >= adaptive_threshold and symbol_to_act in self.open_positions:
-                            logger.info(f"[RL Strategy] Skipping {symbol_to_act}: Already has open position")
-                        else:
-                            logger.info(f" [RL Strategy] {symbol_to_act}: Final Confidence {final_confidence:.2%} < Threshold {adaptive_threshold:.2%}")
-                         
-                        # processing symbols c confidence cao nhung RL action = HOLD (fallback analysis)
-                        if action_code == 0 and symbol_to_act in self.active_symbols and symbol_to_act not in self.open_positions:
-                            if confidence > 0.52:  # Confidence threshold cho fallback analysis
-                                print(f"   [Debug] {symbol_to_act}: RL=HOLD nhung confidence cao, starting Master Agent processing")
-                                logger.info(f" [Master Agent] Starting analysis for {symbol_to_act}")
-                                print(f"   [Master Agent] Starting analysis for {symbol_to_act}")
-                                print(f"   [Debug] Master Agent Coordinator: {self.master_agent_coordinator}")
-                                
-                                try:
-                                    master_decision, master_confidence = self.master_agent_coordinator.coordinate_decision(
-                                        'trading_decision', live_data_cache.get(symbol_to_act, pd.DataFrame()), symbol_to_act
-                                    )
-                                    logger.info(f" [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
-                                    print(f"   [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
-                                except Exception as e:
-                                    logger.error(f"[Master Agent] Error analyzing {symbol_to_act}: {e}")
-                                    print(f"   [Master Agent] Error analyzing {symbol_to_act}: {e}")
-                                    master_decision, master_confidence = "HOLD", 0.5
                 
                 # Ly tn hiu t Ensemble model lm fallback
                 try:
@@ -15612,15 +16973,161 @@ class EnhancedTradingBot:
                     if position["signal"] == "BUY":
                         if current_price <= position["sl"]:
                             print(f"   [Emergency SL] {symbol}: CH M SL KH N C P! {current_price:.5f} <= {position['sl']:.5f}")
-                            self.close_position_enhanced(symbol, "Emergency Stop Loss", current_price)
+                            emergency_reason = self._analyze_emergency_stop_reason(symbol, position, current_price, "BUY")
+                            self.close_position_enhanced(symbol, f"Emergency Stop Loss: {emergency_reason}", current_price)
                     else:  # SELL
                         if current_price >= position["sl"]:
                             print(f"   [Emergency SL] {symbol}: CH M SL KH N C P! {current_price:.5f} >= {position['sl']:.5f}")
-                            self.close_position_enhanced(symbol, "Emergency Stop Loss", current_price)
+                            emergency_reason = self._analyze_emergency_stop_reason(symbol, position, current_price, "SELL")
+                            self.close_position_enhanced(symbol, f"Emergency Stop Loss: {emergency_reason}", current_price)
                             
             except Exception as e:
                 print(f"   [Emergency SL] Li Check {symbol}: {e}")
                 continue
+    
+    def _analyze_emergency_stop_reason(self, symbol, position, current_price, signal_direction):
+        """
+        Analyze and provide detailed reasoning for emergency stop loss
+        """
+        try:
+            print(f"🚨 [Emergency Stop Analysis] Analyzing reason for {symbol}")
+            
+            reasons = []
+            risk_factors = []
+            market_conditions = []
+            
+            # 1. Calculate loss metrics
+            entry_price = position["entry_price"]
+            stop_loss = position["sl"]
+            
+            if signal_direction == "BUY":
+                loss_amount = entry_price - current_price
+                loss_pct = (loss_amount / entry_price) * 100
+            else:  # SELL
+                loss_amount = current_price - entry_price
+                loss_pct = (loss_amount / entry_price) * 100
+            
+            reasons.append(f"Loss: {loss_pct:.2f}% ({loss_amount:.6f})")
+            
+            # 2. Time-based analysis
+            entry_time = position.get("timestamp", datetime.now())
+            if isinstance(entry_time, str):
+                try:
+                    entry_time = datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                except:
+                    entry_time = datetime.now()
+            
+            time_held = datetime.now() - entry_time
+            hours_held = time_held.total_seconds() / 3600
+            
+            if hours_held < 1:
+                risk_factors.append(f"Quick loss (<1h held)")
+            elif hours_held > 168:  # 7 days
+                risk_factors.append(f"Extended hold ({hours_held/24:.1f} days)")
+            
+            reasons.append(f"Held: {hours_held:.1f}h")
+            
+            # 3. Market volatility analysis
+            try:
+                multi_tf_data = self.data_manager.fetch_multi_timeframe_data(symbol, count=50)
+                if multi_tf_data:
+                    primary_tf = PRIMARY_TIMEFRAME_BY_SYMBOL.get(symbol, PRIMARY_TIMEFRAME)
+                    df = multi_tf_data.get(primary_tf)
+                    
+                    if df is not None and len(df) > 10:
+                        # Calculate recent volatility
+                        recent_volatility = df['close'].pct_change().rolling(10).std().iloc[-1] * 100
+                        if recent_volatility > 2.0:  # High volatility
+                            market_conditions.append(f"High volatility ({recent_volatility:.2f}%)")
+                        
+                        # Check for gap moves
+                        latest_change = abs(df['close'].pct_change().iloc[-1]) * 100
+                        if latest_change > 1.0:  # Large recent move
+                            market_conditions.append(f"Large move ({latest_change:.2f}%)")
+                        
+                        # Check RSI for extreme conditions
+                        if 'rsi' in df.columns:
+                            current_rsi = df['rsi'].iloc[-1]
+                            if current_rsi < 20:
+                                market_conditions.append(f"Oversold (RSI: {current_rsi:.1f})")
+                            elif current_rsi > 80:
+                                market_conditions.append(f"Overbought (RSI: {current_rsi:.1f})")
+            except Exception as e:
+                market_conditions.append("Market data unavailable")
+            
+            # 4. News/Sentiment analysis
+            try:
+                if hasattr(self, 'news_manager') and self.news_manager:
+                    # Check for recent negative news
+                    news_sentiment = getattr(self.news_manager, 'get_latest_sentiment', lambda x: None)(symbol)
+                    if news_sentiment and news_sentiment.get('compound', 0) < -0.3:
+                        market_conditions.append("Negative news sentiment")
+            except Exception:
+                pass
+            
+            # 5. Position sizing risk
+            position_size = position.get("quantity", 0)
+            if position_size > 0.1:  # Large position
+                risk_factors.append("Large position size")
+            
+            # 6. Stop loss distance analysis
+            sl_distance_pct = abs(stop_loss - entry_price) / entry_price * 100
+            if sl_distance_pct < 0.5:
+                risk_factors.append("Tight stop loss")
+            elif sl_distance_pct > 5.0:
+                risk_factors.append("Wide stop loss")
+            
+            # 7. Market session analysis
+            current_hour = datetime.now().hour
+            if 0 <= current_hour <= 6:  # Asian session low liquidity
+                market_conditions.append("Low liquidity session")
+            
+            # Compile comprehensive reason
+            reason_parts = []
+            if reasons:
+                reason_parts.append(" | ".join(reasons))
+            if risk_factors:
+                reason_parts.append(f"Risk: {', '.join(risk_factors)}")
+            if market_conditions:
+                reason_parts.append(f"Market: {', '.join(market_conditions)}")
+            
+            comprehensive_reason = " | ".join(reason_parts) if reason_parts else "Standard stop loss hit"
+            
+            # Log detailed analysis
+            print(f"🔍 [Emergency Stop Reasoning] {symbol}:")
+            print(f"   📊 Loss Analysis: {loss_pct:.2f}% loss, held {hours_held:.1f}h")
+            if risk_factors:
+                print(f"   ⚠️  Risk Factors: {', '.join(risk_factors)}")
+            if market_conditions:
+                print(f"   🌍 Market Conditions: {', '.join(market_conditions)}")
+            print(f"   📝 Final Reason: {comprehensive_reason}")
+            
+            # Store in emergency stop history for analysis
+            if not hasattr(self, 'emergency_stop_history'):
+                self.emergency_stop_history = []
+            
+            self.emergency_stop_history.append({
+                'timestamp': datetime.now(),
+                'symbol': symbol,
+                'loss_pct': loss_pct,
+                'hours_held': hours_held,
+                'risk_factors': risk_factors,
+                'market_conditions': market_conditions,
+                'comprehensive_reason': comprehensive_reason,
+                'entry_price': entry_price,
+                'exit_price': current_price,
+                'stop_loss': stop_loss
+            })
+            
+            # Keep only last 100 emergency stops
+            if len(self.emergency_stop_history) > 100:
+                self.emergency_stop_history = self.emergency_stop_history[-100:]
+            
+            return comprehensive_reason
+            
+        except Exception as e:
+            print(f"❌ [Emergency Stop Analysis] Error analyzing {symbol}: {e}")
+            return f"Analysis error: {str(e)[:50]}"
 
     def check_historical_sl_for_all_positions(self, historical_candles=5):
         """
@@ -19643,6 +21150,62 @@ class ProductionTestSuite:
             return isinstance(result, dict) and "block_trading" in result
         except Exception:
             return False
+    
+    # === NEWS MANAGEMENT METHODS ===
+    
+    def get_news_for_symbol(self, symbol, date=None):
+        """Get news for a specific symbol from files"""
+        if not self.news_manager:
+            print("⚠️ [News] News manager not available")
+            return None
+        
+        return self.news_manager.get_news_from_file(symbol, date)
+    
+    def get_latest_news_summary(self):
+        """Get summary of latest news"""
+        if not self.news_manager:
+            print("⚠️ [News] News manager not available")
+            return None
+        
+        return self.news_manager.get_latest_news_summary()
+    
+    def force_news_fetch(self):
+        """Force immediate news fetch for testing"""
+        if not hasattr(self, 'news_scheduler') or not self.news_scheduler:
+            print("⚠️ [News] News scheduler not available")
+            return False
+        
+        try:
+            self.news_scheduler.force_fetch_now()
+            return True
+        except Exception as e:
+            print(f"❌ [News] Error forcing news fetch: {e}")
+            return False
+    
+    def get_news_scheduler_status(self):
+        """Get news scheduler status"""
+        if not hasattr(self, 'news_scheduler') or not self.news_scheduler:
+            return {"error": "News scheduler not available"}
+        
+        return self.news_scheduler.get_scheduler_status()
+    
+    def stop_news_scheduler(self):
+        """Stop the news scheduler"""
+        if hasattr(self, 'news_scheduler') and self.news_scheduler:
+            self.news_scheduler.stop_scheduler()
+            print("⏹️ [News] News scheduler stopped")
+        else:
+            print("⚠️ [News] News scheduler not available")
+    
+    def restart_news_scheduler(self):
+        """Restart the news scheduler"""
+        if hasattr(self, 'news_scheduler') and self.news_scheduler:
+            self.news_scheduler.stop_scheduler()
+            time.sleep(2)
+            self.news_scheduler.start_scheduler()
+            print("🔄 [News] News scheduler restarted")
+        else:
+            print("⚠️ [News] News scheduler not available")
 
     def test_cv_purged_implementation(self):
         """Test enhanced CV purged implementation"""
