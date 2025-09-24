@@ -6072,9 +6072,17 @@ class NewsEconomicManager:
                 self.daily_news_file = expected_file
                 self._setup_news_storage()
             
-            # Load existing data
-            with open(self.daily_news_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # Load existing data with error handling
+            try:
+                with open(self.daily_news_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                print(f"⚠️ [News Storage] Error loading {self.daily_news_file}: {e}")
+                print(f"🔧 [News Storage] Recreating file with fresh structure...")
+                # Recreate the file with proper structure
+                self._setup_news_storage()
+                with open(self.daily_news_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
             
             # Add/update symbol news
             if symbol not in data["symbols"]:
@@ -6174,8 +6182,12 @@ class NewsEconomicManager:
                 print(f"📰 [News Reader] No news file found for {date}")
                 return None
             
-            with open(news_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            try:
+                with open(news_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f"❌ [News Reader] Error parsing JSON in {news_file}: {e}")
+                return None
             
             if symbol is None:
                 # Return all news for the date
@@ -6201,8 +6213,15 @@ class NewsEconomicManager:
             if not os.path.exists(self.news_index_file):
                 return None
             
-            with open(self.news_index_file, 'r', encoding='utf-8') as f:
-                index_data = json.load(f)
+            try:
+                with open(self.news_index_file, 'r', encoding='utf-8') as f:
+                    index_data = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f"❌ [News Index] Error parsing JSON in {self.news_index_file}: {e}")
+                print(f"🔧 [News Index] Recreating index file...")
+                self._update_news_index()
+                with open(self.news_index_file, 'r', encoding='utf-8') as f:
+                    index_data = json.load(f)
             
             if not index_data["available_dates"]:
                 return None
@@ -6455,15 +6474,20 @@ class DailyNewsScheduler:
             # Load existing summaries if file exists
             summaries = []
             if os.path.exists(summary_file):
-                with open(summary_file, 'r', encoding='utf-8') as f:
-                    summaries = json.load(f)
+                try:
+                    with open(summary_file, 'r', encoding='utf-8') as f:
+                        summaries = json.load(f)
+                except json.JSONDecodeError as e:
+                    print(f"⚠️ [Daily News Scheduler] Error parsing summary file {summary_file}: {e}")
+                    print(f"🔧 [Daily News Scheduler] Starting with empty summaries list...")
+                    summaries = []
             
             # Add new summary
             summaries.append(summary)
             
             # Save updated summaries
             with open(summary_file, 'w', encoding='utf-8') as f:
-                json.dump(summaries, f, indent=2, ensure_ascii=False, default=self._json_serializer)
+                json.dump(summaries, f, indent=2, ensure_ascii=False, default=self.news_manager._json_serializer)
             
             print(f"💾 [Daily News Scheduler] Summary saved to {summary_file}")
             
