@@ -14430,6 +14430,41 @@ class EnhancedTradingBot:
         except Exception as e:
             logging.error(f"Error triggering enhanced online learning feedback: {e}")
 
+    def _trigger_online_learning_feedback_enhanced(self, symbol, final_decision, final_confidence, market_data=None):
+        """Enhanced online learning feedback loop with market data integration"""
+        try:
+            # Create enhanced feedback data with market context
+            feedback_data = {
+                'symbol': symbol,
+                'timestamp': pd.Timestamp.now(),
+                'final_decision': final_decision,
+                'final_confidence': final_confidence,
+                'market_data_available': market_data is not None and not market_data.empty if hasattr(market_data, 'empty') else market_data is not None
+            }
+            
+            # Add market data features if available
+            if market_data is not None and hasattr(market_data, 'empty') and not market_data.empty:
+                try:
+                    # Add recent market indicators to feedback
+                    if len(market_data) > 0:
+                        latest_data = market_data.iloc[-1]
+                        feedback_data.update({
+                            'market_price': latest_data.get('close', None),
+                            'market_volume': latest_data.get('volume', None),
+                            'market_volatility': market_data['close'].pct_change().std() if 'close' in market_data.columns and len(market_data) > 1 else None
+                        })
+                except Exception as market_error:
+                    logging.warning(f"Error processing market data for feedback: {market_error}")
+            
+            # Send enhanced feedback to online learning manager
+            if hasattr(self, 'auto_retrain_manager') and hasattr(self.auto_retrain_manager, 'online_learning'):
+                self.auto_retrain_manager.online_learning.process_decision_feedback(feedback_data)
+            
+            logging.info(f"[Online Learning Enhanced] Feedback sent for {symbol}: {final_decision} ({final_confidence:.2%})")
+            
+        except Exception as e:
+            logging.error(f"Error triggering enhanced online learning feedback: {e}")
+
     def _init_database(self):
         """Initialize database connection"""
         try:
