@@ -1877,13 +1877,14 @@ class DataFreshnessMonitor:
             "freshness_history": self.freshness_history
         }
 
-def is_market_open(symbol):
+def is_market_open(symbol, current_time=None):
     """
     Check if the market for a specific symbol is currently open (UTC-aware version).
     Special rule: Allow crypto symbols trading 24/7.
 
     Args:
         symbol (str): Trading symbol to check
+        current_time (datetime, optional): Current time to check (defaults to None)
 
     Returns:
         bool: True if market is open, False otherwise
@@ -6446,6 +6447,176 @@ class NewsEconomicManager:
             df["news_impact_score"] = 0.0
         return df
 
+    def add_economic_event_features(self, df, symbol):
+        """
+        IMPORTANT: All economic data is integrated into DataFrame,
+        để xử lý đúng dữ liệu cho từng loại tài sản.
+        """
+        logging.info(f"   [Features] Starting to add economic event features for {symbol}...")
+        df["is_near_high_impact_event"] = 0
+        
+        # Fallback: Add basic economic event features without Trading Economics
+        self._add_basic_economic_features(df, symbol)
+
+        # L y l ch kinh tcho kho ng th i gian of DataFrame
+        start_date = df.index.min().strftime("%Y-%m-%d")
+        end_date = df.index.max().strftime("%Y-%m-%d")
+
+        try:
+            # Check if Trading Economics is available
+            try:
+                trading_economics_available = globals().get('TRADING_ECONOMICS_AVAILABLE', False)
+            except:
+                trading_economics_available = False
+                
+            if not trading_economics_available or not te:
+                logging.info("Trading Economics not available - skipping economic event features")
+                return df
+
+            # Enhanced error handling for Trading Economics API
+            try:
+                calendar_raw = te.getCalendarData(initDate=start_date, endDate=end_date)
+                if not isinstance(calendar_raw, list) or not calendar_raw:
+                    logging.info("No economic calendar data available for the specified period")
+                    return df
+            except Exception as api_error:
+                error_msg = str(api_error)
+                if "403" in error_msg or "Forbidden" in error_msg:
+                    logging.warning("⚠️ Trading Economic API access forbidden (403) - API key may be invalid or rate limited")
+                    logging.warning("⚠️ Bot will continue without Trading Economics data")
+                    # Note: Trading Economics API is not available, continuing without it
+                    return df
+                elif "401" in error_msg or "Unauthorized" in error_msg:
+                    logging.warning("🔑 Trading Economics API unauthorized (401) - check API key")
+                    return df
+                else:
+                    logging.warning(f"⚠️ Trading Economics API error: {error_msg}")
+                    return df
+        except Exception as e:
+            logging.warning(f"   [Features]  Unexpected error accessing Trading Economics: {e}")
+            return df
+
+    def _add_basic_economic_features(self, df, symbol):
+        """Add basic economic event featurefixs fallback when Trading Economics is unavailable"""
+        try:
+            # Add basic economic calendar features based on common patterns
+            df["is_near_high_impact_event"] = 0
+            
+            # Add day-of-week effects (common economic events happen on specifihas dataays)
+            df["is_friday"] = (df.index.dayofweek == 4).astype(int)
+            df["is_monday"] = (df.index.dayofweek == 0).astype(int)
+            
+            # Add month-end effects (common for economihas dataata releases)
+            df["is_month_end"] = (df.index.day >= 25).astype(int)
+            
+            # Add quarterly effects (Q1, Q2, Q3, Q4)
+            df["quarter"] = df.index.quarter
+            df["is_q1"] = (df.index.quarter == 1).astype(int)
+            df["is_q2"] = (df.index.quarter == 2).astype(int)
+            df["is_q3"] = (df.index.quarter == 3).astype(int)
+            df["is_q4"] = (df.index.quarter == 4).astype(int)
+            
+            # Add holiday proximity effects (simplified)
+            df["is_holiday_proximity"] = 0  # Placeholder for holiday effects
+            
+            # Ensure all required features exist
+            required_features = ['is_q1', 'is_q2', 'is_q3', 'is_q4', 'is_month_end', 'is_holiday_proximity']
+            for feature in required_features:
+                if feature not in df.columns:
+                    df[feature] = 0
+                    logging.warning(f"Missing required feature '{feature}' for {symbol}, created with default value 0")
+            
+            logging.info(f"   [Features] Added basic economic features for {symbol} (fallback mode)")
+            
+        except Exception as e:
+            logging.warning(f"   [Features] Error adding basic economic features: {e}")
+        
+        # Try to get Trading Economics data, but don't fail if unavailable
+        try:
+            # L y l ch kinh tcho kho ng th i gian of DataFrame
+            start_date = df.index.min().strftime("%Y-%m-%d")
+            end_date = df.index.max().strftime("%Y-%m-%d")
+
+            # Check if Trading Economics is available
+            try:
+                trading_economics_available = globals().get('TRADING_ECONOMICS_AVAILABLE', False)
+            except:
+                trading_economics_available = False
+                
+            if trading_economics_available and te:
+                # Enhanced error handling for Trading Economics API
+                try:
+                    calendar_raw = te.getCalendarData(initDate=start_date, endDate=end_date)
+                    if not isinstance(calendar_raw, list) or not calendar_raw:
+                        logging.info("No economic calendar data available for the specified period")
+                        return df
+                except Exception as api_error:
+                    error_msg = str(api_error)
+                    if "403" in error_msg or "Forbidden" in error_msg:
+                        logging.warning(" Trading Economic API access forbidden (403) - using fallback features only")
+                        # Note: Trading Economics API is not available, continuing without it
+                        return df
+                    elif "401" in error_msg or "Unauthorized" in error_msg:
+                        logging.warning(" Trading Economics API unauthorized (401) - using fallback features only")
+                        return df
+                    else:
+                        logging.warning(f" Trading Economics API error: {error_msg} - using fallback features only")
+                        return df
+            else:
+                logging.info("Trading Economics not available - using fallback features only")
+                return df
+
+            # Chu n ha all s kin kinh ttTrading Economics
+            high_impact_events = []
+            high_impact_keywords = ["NFP", "CPI", "FOMC", "Interest Rate", "GDP"]
+            for event in calendar_raw:
+                try:
+                    is_high_impact = event.get("Importance") == "High" or any(
+                        keyword.lower() in event.get("Event", "").lower()
+                        for keyword in high_impact_keywords
+                    )
+                    if is_high_impact:
+                        event_time = pd.to_datetime(event["Date"]).tz_localize("UTC")
+                        event_currency = event.get("currency", "").upper()
+                        high_impact_events.append({"time": event_time, "currency": event_currency})
+                except:
+                    continue
+
+            if not high_impact_events:
+                return df
+
+            # <<< LOGIC fix L I: Xhas data nh used money tlin quan >>>
+            SYMBOL_oldRRENCY_MAP = {
+                "SPX500": ["USD"], "DE40": ["EUR"], "JP225": ["JPY"],
+                "XAUUSD": ["USD"], "ETHUSD": ["USD"]
+            }
+            relevant_currencies = []
+            if symbol in SYMBOL_oldRRENCY_MAP:
+                relevant_currencies = SYMBOL_oldRRENCY_MAP[symbol]
+            elif len(symbol) >= 6:
+                relevant_currencies.extend([symbol[:3].upper(), symbol[3:].upper()])
+            # <<< K T THC fix L I >>>
+
+            if not relevant_currencies:
+                return df
+
+            # Đánh dấu dữ liệu các hàng gần sự kiện
+            df_utc_index = df.index.tz_convert("UTC")
+            for event in high_impact_events:
+                # Chprocessing if s kin lin quan dn symbol
+                if event["currency"] in relevant_currencies:
+                    event_start_window = event["time"] - timedelta(hours=2)
+                    event_end_window = event["time"] + timedelta(hours=2)
+                    mask = (df_utc_index >= event_start_window) & (df_utc_index <= event_end_window)
+                    df.loc[mask, "is_near_high_impact_event"] = 1
+
+            logging.info(f"   [Features] Economic event features processing completed. {df['is_near_high_impact_event'].sum()} candles marked.")
+            return df
+            
+        except Exception as e:
+            logging.warning(f"   [Features] Error processing economic events: {e}")
+            return df
+
 
 # === DAILY NEWS SCHEDULER ===
 class DailyNewsScheduler:
@@ -6686,177 +6857,6 @@ class DailyNewsScheduler:
             "next_fetch_hours": [h for h in self.fetch_times if h > datetime.now().hour] or [self.fetch_times[0]]
         }
 
-    # NewsEconomicManager methods
-
-    def add_economic_event_features(self, df, symbol):
-        """
-        IMPORTANT: All economic data is integrated into DataFrame,
-        để xử lý đúng dữ liệu cho từng loại tài sản.
-        """
-        logging.info(f"   [Features] Starting to add economic event features for {symbol}...")
-        df["is_near_high_impact_event"] = 0
-        
-        # Fallback: Add basic economic event features without Trading Economics
-        self._add_basic_economic_features(df, symbol)
-
-        # L y l ch kinh tcho kho ng th i gian of DataFrame
-        start_date = df.index.min().strftime("%Y-%m-%d")
-        end_date = df.index.max().strftime("%Y-%m-%d")
-
-        try:
-            # Check if Trading Economics is available
-            try:
-                trading_economics_available = globals().get('TRADING_ECONOMICS_AVAILABLE', False)
-            except:
-                trading_economics_available = False
-                
-            if not trading_economics_available or not te:
-                logging.info("Trading Economics not available - skipping economic event features")
-                return df
-
-            # Enhanced error handling for Trading Economics API
-            try:
-                calendar_raw = te.getCalendarData(initDate=start_date, endDate=end_date)
-                if not isinstance(calendar_raw, list) or not calendar_raw:
-                    logging.info("No economic calendar data available for the specified period")
-                    return df
-            except Exception as api_error:
-                error_msg = str(api_error)
-                if "403" in error_msg or "Forbidden" in error_msg:
-                    logging.warning("⚠️ Trading Economic API access forbidden (403) - API key may be invalid or rate limited")
-                    logging.warning("⚠️ Bot will continue without Trading Economics data")
-                    # Note: Trading Economics API is not available, continuing without it
-                    return df
-                elif "401" in error_msg or "Unauthorized" in error_msg:
-                    logging.warning("🔑 Trading Economics API unauthorized (401) - check API key")
-                    return df
-                else:
-                    logging.warning(f"⚠️ Trading Economics API error: {error_msg}")
-                    return df
-        except Exception as e:
-            logging.warning(f"   [Features]  Unexpected error accessing Trading Economics: {e}")
-            return df
-
-    def _add_basic_economic_features(self, df, symbol):
-        """Add basic economic event featurefixs fallback when Trading Economics is unavailable"""
-        try:
-            # Add basic economic calendar features based on common patterns
-            df["is_near_high_impact_event"] = 0
-            
-            # Add day-of-week effects (common economic events happen on specifihas dataays)
-            df["is_friday"] = (df.index.dayofweek == 4).astype(int)
-            df["is_monday"] = (df.index.dayofweek == 0).astype(int)
-            
-            # Add month-end effects (common for economihas dataata releases)
-            df["is_month_end"] = (df.index.day >= 25).astype(int)
-            
-            # Add quarterly effects (Q1, Q2, Q3, Q4)
-            df["quarter"] = df.index.quarter
-            df["is_q1"] = (df.index.quarter == 1).astype(int)
-            df["is_q2"] = (df.index.quarter == 2).astype(int)
-            df["is_q3"] = (df.index.quarter == 3).astype(int)
-            df["is_q4"] = (df.index.quarter == 4).astype(int)
-            
-            # Add holiday proximity effects (simplified)
-            df["is_holiday_proximity"] = 0  # Placeholder for holiday effects
-            
-            # Ensure all required features exist
-            required_features = ['is_q1', 'is_q2', 'is_q3', 'is_q4', 'is_month_end', 'is_holiday_proximity']
-            for feature in required_features:
-                if feature not in df.columns:
-                    df[feature] = 0
-                    logging.warning(f"Missing required feature '{feature}' for {symbol}, created with default value 0")
-            
-            logging.info(f"   [Features] Added basic economic features for {symbol} (fallback mode)")
-            
-        except Exception as e:
-            logging.warning(f"   [Features] Error adding basic economic features: {e}")
-        
-        # Try to get Trading Economics data, but don't fail if unavailable
-        try:
-            # L y l ch kinh tcho kho ng th i gian of DataFrame
-            start_date = df.index.min().strftime("%Y-%m-%d")
-            end_date = df.index.max().strftime("%Y-%m-%d")
-
-            # Check if Trading Economics is available
-            try:
-                trading_economics_available = globals().get('TRADING_ECONOMICS_AVAILABLE', False)
-            except:
-                trading_economics_available = False
-                
-            if trading_economics_available and te:
-                # Enhanced error handling for Trading Economics API
-                try:
-                    calendar_raw = te.getCalendarData(initDate=start_date, endDate=end_date)
-                    if not isinstance(calendar_raw, list) or not calendar_raw:
-                        logging.info("No economic calendar data available for the specified period")
-                        return df
-                except Exception as api_error:
-                    error_msg = str(api_error)
-                    if "403" in error_msg or "Forbidden" in error_msg:
-                        logging.warning(" Trading Economic API access forbidden (403) - using fallback features only")
-                        # Note: Trading Economics API is not available, continuing without it
-                        return df
-                    elif "401" in error_msg or "Unauthorized" in error_msg:
-                        logging.warning(" Trading Economics API unauthorized (401) - using fallback features only")
-                        return df
-                    else:
-                        logging.warning(f" Trading Economics API error: {error_msg} - using fallback features only")
-                        return df
-            else:
-                logging.info("Trading Economics not available - using fallback features only")
-                return df
-
-            # Chu n ha all s kin kinh ttTrading Economics
-            high_impact_events = []
-            high_impact_keywords = ["NFP", "CPI", "FOMC", "Interest Rate", "GDP"]
-            for event in calendar_raw:
-                try:
-                    is_high_impact = event.get("Importance") == "High" or any(
-                        keyword.lower() in event.get("Event", "").lower()
-                        for keyword in high_impact_keywords
-                    )
-                    if is_high_impact:
-                        event_time = pd.to_datetime(event["Date"]).tz_localize("UTC")
-                        event_currency = event.get("currency", "").upper()
-                        high_impact_events.append({"time": event_time, "currency": event_currency})
-                except:
-                    continue
-
-            if not high_impact_events:
-                return df
-
-            # <<< LOGIC fix L I: Xhas data nh used money tlin quan >>>
-            SYMBOL_oldRRENCY_MAP = {
-                "SPX500": ["USD"], "DE40": ["EUR"], "JP225": ["JPY"],
-                "XAUUSD": ["USD"], "ETHUSD": ["USD"]
-            }
-            relevant_currencies = []
-            if symbol in SYMBOL_oldRRENCY_MAP:
-                relevant_currencies = SYMBOL_oldRRENCY_MAP[symbol]
-            elif len(symbol) >= 6:
-                relevant_currencies.extend([symbol[:3].upper(), symbol[3:].upper()])
-            # <<< K T THC fix L I >>>
-
-            if not relevant_currencies:
-                return df
-
-            # Đánh dấu dữ liệu các hàng gần sự kiện
-            df_utc_index = df.index.tz_convert("UTC")
-            for event in high_impact_events:
-                # Chprocessing if s kin lin quan dn symbol
-                if event["currency"] in relevant_currencies:
-                    event_start_window = event["time"] - timedelta(hours=2)
-                    event_end_window = event["time"] + timedelta(hours=2)
-                    mask = (df_utc_index >= event_start_window) & (df_utc_index <= event_end_window)
-                    df.loc[mask, "is_near_high_impact_event"] = 1
-
-            logging.info(f"   [Features] Economic event features processing completed. {df['is_near_high_impact_event'].sum()} candles marked.")
-            return df
-            
-        except Exception as e:
-            logging.warning(f"   [Features] Error processing economic events: {e}")
-            return df
     
 
 
