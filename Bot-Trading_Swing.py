@@ -18744,6 +18744,20 @@ class EnhancedTradingBot:
                         print(f"   Profit: {trailing_decision['current_profit_pct']:.2%}")
                         print(f"   Trailing Distance: {trailing_decision['recommended_distance']:.5f}")
                         
+                        # Calculate TP progress for console display
+                        tp_target_console = position.get('tp', 0)
+                        tp_progress_console = 0
+                        if tp_target_console > 0:
+                            if direction.upper() == 'BUY':
+                                total_dist = tp_target_console - entry_price
+                                current_dist = current_price - entry_price
+                            else:
+                                total_dist = entry_price - tp_target_console
+                                current_dist = entry_price - current_price
+                            if total_dist != 0:
+                                tp_progress_console = max(0, min(100, (current_dist / total_dist) * 100))
+                        print(f"   Progress to TP: {tp_progress_console:.1f}%")
+                        
                         # Update position with trailing stop
                         position['trailing_stop'] = True
                         position['trailing_distance'] = trailing_decision['recommended_distance']
@@ -18751,16 +18765,51 @@ class EnhancedTradingBot:
                             current_price, direction, trailing_decision['recommended_distance']
                         )
                         
+                        # Show SL range information in console after calculation
+                        original_sl_console = position.get('initial_sl', position.get('sl', 0))
+                        print(f"   SL Range: {original_sl_console:.5f} → {position['trailing_stop_price']:.5f}")
+                        
                         # Save updated position
                         save_open_positions(self.open_positions)
+                        
+                        # Calculate SL range information for notification
+                        original_sl = position.get('initial_sl', position.get('sl', 0))
+                        new_trailing_sl = position['trailing_stop_price']
+                        
+                        # Calculate progress towards Take Profit target
+                        tp_target = position.get('tp', 0)
+                        tp_progress_pct = 0
+                        
+                        if tp_target > 0:
+                            if direction.upper() == 'BUY':
+                                # For BUY: progress = (current_price - entry_price) / (tp_target - entry_price)
+                                total_distance_to_tp = tp_target - entry_price
+                                current_distance = current_price - entry_price
+                            else:  # SELL
+                                # For SELL: progress = (entry_price - current_price) / (entry_price - tp_target)
+                                total_distance_to_tp = entry_price - tp_target
+                                current_distance = entry_price - current_price
+                            
+                            if total_distance_to_tp != 0:
+                                tp_progress_pct = (current_distance / total_distance_to_tp) * 100
+                                tp_progress_pct = max(0, min(100, tp_progress_pct))  # Clamp between 0-100%
+                        
+                        # Format SL values appropriately based on symbol (remove decimals for crypto like BTC)
+                        if symbol.startswith('BTC') or symbol.startswith('ETH') or 'USD' in symbol:
+                            original_sl_formatted = f"{original_sl:.0f}"
+                            new_trailing_sl_formatted = f"{new_trailing_sl:.0f}"
+                        else:
+                            original_sl_formatted = f"{original_sl:.5f}"
+                            new_trailing_sl_formatted = f"{new_trailing_sl:.5f}"
                         
                         # Send notification
                         self.send_discord_alert(
                             f"🎯 **Master Agent Trailing Stop Activated**\n\n"
                             f"**Symbol:** {symbol}\n"
                             f"**Direction:** {direction}\n"
-                            f"**Current Profit:** {trailing_decision['current_profit_pct']:.2%}\n"
+                            f"**Current Profit:** {trailing_decision['current_profit_pct']:.2%} ({tp_progress_pct:.1f}% to TP)\n"
                             f"**Trailing Distance:** {trailing_decision['recommended_distance']:.5f}\n"
+                            f"**SL Range:** {original_sl_formatted} → {new_trailing_sl_formatted}\n"
                             f"**Reasons:** {', '.join(trailing_decision['reasons'])}"
                         )
                     
