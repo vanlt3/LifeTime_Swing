@@ -18355,8 +18355,8 @@ class EnhancedTradingBot:
                         else:
                             print(f"[{symbol}]  Confidence gi m ({current_confidence:.2%}) nhung gi v n gic u trc. from model th i gil nh.")
 
-                # 4. UPDATE TRAILING STOP (Logic old original)
-                self.update_trailing_stop(symbol, current_price)
+                # 4. UPDATE TRAILING STOP - DISABLED (Master Agent handles all trailing stops now)
+                # self.update_trailing_stop(symbol, current_price)  # Disabled - Master Agent only
 
             except Exception as e:
                 import traceback
@@ -18417,6 +18417,10 @@ class EnhancedTradingBot:
                 self.close_all_non_crypto_positions_for_weekend()
                 self.weekend_close_executed = True # nhn d liu d thc hin d lߦ+p lߦi
     def update_trailing_stop(self, symbol, current_price):
+        """
+        DEPRECATED: This method is no longer used. 
+        Master Agent now handles ALL trailing stops via _apply_master_agent_trailing_stops()
+        """
         if RISK_MANAGEMENT.get("TRAILING_STOP_MULTIPLIER", 0) <= 0:
             return
         if symbol not in self.open_positions:
@@ -18592,7 +18596,7 @@ class EnhancedTradingBot:
         # 5. Position management
         await self._handle_position_management(live_data_cache)
         
-        # 5.1. Master Agent trailing stop management
+        # 5.1. Master Agent trailing stop management (ONLY system for trailing stops)
         self._apply_master_agent_trailing_stops()
         
         # 6. Trading strategy execution
@@ -18790,12 +18794,13 @@ class EnhancedTradingBot:
             }
     
     def _apply_master_agent_trailing_stops(self):
-        """Apply Master Agent trailing stop logic to open positions"""
+        """Apply Master Agent trailing stop logic to open positions - ONLY SYSTEM FOR TRAILING STOPS"""
         try:
             if not self.open_positions:
                 return
             
             print("🎯 [Master Agent Integration] Checking trailing stops for open positions...")
+            print(f"   [Master Agent] Processing {len(self.open_positions)} open positions with MASTER AGENT ONLY")
             
             for symbol, position in self.open_positions.items():
                 try:
