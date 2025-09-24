@@ -1,0 +1,38 @@
+[
+  {
+    "symbol": "EURUSD",
+    "signal": "BUY",
+    "entry_price": 1.085,
+    "exit_price": 1.09,
+    "pips": 50.0,
+    "reason": "Hit Take Profit",
+    "opened_at": "2024-01-15 10:00:00",
+    "closed_at": "2024-01-15 14:30:00",
+    "initial_confidence": 0.75,
+    "is_winning": true
+  },
+  {
+    "symbol": "GBPUSD",
+    "signal": "SELL",
+    "entry_price": 1.25,
+    "exit_price": 1.252,
+    "pips": -20.0,
+    "reason": "Hit Stop Loss",
+    "opened_at": "2024-01-15 11:00:00",
+    "closed_at": "2024-01-15 13:45:00",
+    "initial_confidence": 0.68,
+    "is_winning": false
+  },
+  {
+    "symbol": "EURUSD",
+    "signal": "BUY",
+    "entry_price": 1.08,
+    "exit_price": 1.083,
+    "pips": 30.0,
+    "reason": "Hit Take Profit",
+    "opened_at": "2024-01-16 09:00:00",
+    "closed_at": "2024-01-16 12:00:00",
+    "initial_confidence": 0.82,
+    "is_winning": true
+  }
+]
