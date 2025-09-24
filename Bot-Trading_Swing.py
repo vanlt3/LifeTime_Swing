@@ -18751,8 +18751,24 @@ class EnhancedTradingBot:
                             current_price, direction, trailing_decision['recommended_distance']
                         )
                         
+                        # Show SL range information in console after calculation
+                        original_sl_console = position.get('initial_sl', position.get('sl', 0))
+                        print(f"   SL Range: {original_sl_console:.5f} → {position['trailing_stop_price']:.5f}")
+                        
                         # Save updated position
                         save_open_positions(self.open_positions)
+                        
+                        # Calculate SL range information for notification
+                        original_sl = position.get('initial_sl', position.get('sl', 0))
+                        new_trailing_sl = position['trailing_stop_price']
+                        
+                        # Format SL values appropriately based on symbol (remove decimals for crypto like BTC)
+                        if symbol.startswith('BTC') or symbol.startswith('ETH') or 'USD' in symbol:
+                            original_sl_formatted = f"{original_sl:.0f}"
+                            new_trailing_sl_formatted = f"{new_trailing_sl:.0f}"
+                        else:
+                            original_sl_formatted = f"{original_sl:.5f}"
+                            new_trailing_sl_formatted = f"{new_trailing_sl:.5f}"
                         
                         # Send notification
                         self.send_discord_alert(
@@ -18761,6 +18777,7 @@ class EnhancedTradingBot:
                             f"**Direction:** {direction}\n"
                             f"**Current Profit:** {trailing_decision['current_profit_pct']:.2%}\n"
                             f"**Trailing Distance:** {trailing_decision['recommended_distance']:.5f}\n"
+                            f"**SL Range:** {original_sl_formatted} → {new_trailing_sl_formatted}\n"
                             f"**Reasons:** {', '.join(trailing_decision['reasons'])}"
                         )
                     
