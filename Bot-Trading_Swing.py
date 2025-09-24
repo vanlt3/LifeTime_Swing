@@ -12331,6 +12331,990 @@ class PortfolioOptimizationAgent:
             logging.error(f"PortfolioOptimizationAgent error: {e}")
             return "HOLD", 0.5
 
+# === MASTER AGENT FOR TP/SL DECISIONS ===
+class MasterAgent:
+    """
+    Master Agent for intelligent TP/SL and Trailing Stop decisions
+    
+    This agent combines multiple analysis methods to determine optimal:
+    - Take Profit levels
+    - Stop Loss levels  
+    - Trailing Stop activation timing
+    - Risk-Reward optimization
+    """
+    
+    def __init__(self):
+        print("🎯 [Master Agent] Initializing Master Agent for TP/SL decisions...")
+        
+        # Core decision tracking
+        self.tp_sl_history = {}
+        self.trailing_stop_decisions = {}
+        self.performance_metrics = {}
+        
+        # Specialist agents for analysis
+        self.specialist_agents = {
+            'trend_analyzer': TrendAnalysisAgent(),
+            'volatility_predictor': VolatilityPredictionAgent(),
+            'risk_manager': RiskManagementAgent(),
+            'sentiment_analyzer': SentimentAnalysisAgent()
+        }
+        
+        # Decision parameters
+        self.min_risk_reward_ratio = 1.5
+        self.max_risk_reward_ratio = 5.0
+        self.trailing_activation_profit_threshold = 0.015  # 1.5%
+        
+        # Learning parameters - weights for different factors
+        self.decision_weights = {
+            'atr_weight': 0.3,
+            'volatility_weight': 0.25,
+            'trend_weight': 0.2,
+            'support_resistance_weight': 0.15,
+            'news_sentiment_weight': 0.1
+        }
+        
+        # Market condition thresholds
+        self.volatility_thresholds = {
+            'low': 0.3,
+            'medium': 0.6,
+            'high': 0.8
+        }
+        
+        print("✅ [Master Agent] Master Agent initialized successfully")
+    
+    def decide_tp_sl_levels(self, symbol, entry_price, direction, market_data):
+        """
+        Master decision function for TP/SL levels
+        Combines multiple analysis methods for optimal risk management
+        """
+        try:
+            print(f"🎯 [Master Agent] Deciding TP/SL levels for {symbol} - {direction} at {entry_price}")
+            
+            # Step 1: Gather market intelligence
+            market_intelligence = self._gather_market_intelligence(symbol, market_data)
+            
+            # Step 2: Calculate base levels using multiple methods
+            atr_levels = self._calculate_atr_based_levels(symbol, entry_price, market_data)
+            volatility_levels = self._calculate_volatility_adjusted_levels(symbol, entry_price, direction, market_intelligence)
+            trend_levels = self._calculate_trend_based_levels(symbol, entry_price, direction, market_intelligence)
+            sr_levels = self._calculate_support_resistance_levels(symbol, market_data)
+            
+            # Step 3: Apply intelligent fusion algorithm
+            final_levels = self._fuse_tp_sl_decisions(
+                symbol, entry_price, direction,
+                atr_levels, volatility_levels, trend_levels, sr_levels,
+                market_intelligence
+            )
+            
+            # Step 4: Validate and optimize risk-reward ratio
+            optimized_levels = self._optimize_risk_reward_ratio(final_levels, entry_price, direction)
+            
+            # Step 5: Store decision for learning
+            self._store_tp_sl_decision(symbol, entry_price, direction, optimized_levels, market_intelligence)
+            
+            print(f"✅ [Master Agent] Final TP/SL Decision for {symbol}:")
+            print(f"   📈 Take Profit: {optimized_levels['take_profit']:.6f}")
+            print(f"   📉 Stop Loss: {optimized_levels['stop_loss']:.6f}")
+            print(f"   ⚖️ Risk/Reward Ratio: {optimized_levels['risk_reward_ratio']:.2f}")
+            
+            return optimized_levels
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in TP/SL decision for {symbol}: {e}")
+            return self._get_fallback_tp_sl_levels(entry_price, direction)
+    
+    def decide_trailing_stop_activation(self, symbol, current_price, entry_price, direction, market_data):
+        """
+        Intelligent decision on when to activate trailing stops
+        """
+        try:
+            print(f"🎯 [Master Agent] Analyzing trailing stop activation for {symbol}")
+            
+            # Calculate current profit
+            if direction.upper() == 'BUY':
+                profit_pct = (current_price - entry_price) / entry_price
+                profit_pips = (current_price - entry_price) * 10000  # For forex
+            else:
+                profit_pct = (entry_price - current_price) / entry_price
+                profit_pips = (entry_price - current_price) * 10000
+            
+            # Gather market intelligence
+            market_intelligence = self._gather_market_intelligence(symbol, market_data)
+            
+            # Decision factors
+            decision_factors = {
+                'profit_threshold': profit_pct > self.trailing_activation_profit_threshold,
+                'trend_strength': self._assess_trend_strength(market_intelligence),
+                'volatility_level': self._assess_volatility_level(market_intelligence),
+                'momentum_confirmation': self._check_momentum_confirmation(market_data, direction),
+                'support_resistance': self._check_sr_proximity(current_price, market_data)
+            }
+            
+            # Apply decision logic
+            activation_decision = self._apply_trailing_stop_logic(decision_factors, profit_pct)
+            
+            # Calculate optimal trailing distance
+            trailing_distance = self._calculate_optimal_trailing_distance(
+                symbol, current_price, market_intelligence, profit_pct
+            )
+            
+            # Store decision
+            self.trailing_stop_decisions[symbol] = {
+                'timestamp': datetime.now(),
+                'should_activate': activation_decision['should_activate'],
+                'current_profit_pct': profit_pct,
+                'current_profit_pips': profit_pips,
+                'reasons': activation_decision['reasons'],
+                'trailing_distance': trailing_distance,
+                'decision_factors': decision_factors
+            }
+            
+            result = {
+                'should_activate': activation_decision['should_activate'],
+                'reasons': activation_decision['reasons'],
+                'current_profit_pct': profit_pct,
+                'current_profit_pips': profit_pips,
+                'recommended_distance': trailing_distance,
+                'confidence': activation_decision['confidence']
+            }
+            
+            print(f"✅ [Master Agent] Trailing Stop Decision for {symbol}:")
+            print(f"   🎯 Activate: {'YES' if result['should_activate'] else 'NO'}")
+            print(f"   💰 Current Profit: {profit_pct:.2%} ({profit_pips:.1f} pips)")
+            print(f"   📏 Recommended Distance: {trailing_distance:.5f}")
+            print(f"   🔍 Reasons: {', '.join(result['reasons'])}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in trailing stop decision for {symbol}: {e}")
+            return {
+                'should_activate': False,
+                'reasons': ['Error in analysis'],
+                'current_profit_pct': 0,
+                'recommended_distance': current_price * 0.01
+            }
+    
+    def _gather_market_intelligence(self, symbol, market_data):
+        """Gather comprehensive market intelligence from specialist agents"""
+        intelligence = {}
+        
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 20:
+                return {'error': 'Insufficient data'}
+            
+            # Get analysis from specialist agents
+            for agent_name, agent in self.specialist_agents.items():
+                try:
+                    analysis_result = agent.analyze(df, symbol)
+                    intelligence[agent_name] = analysis_result
+                except Exception as e:
+                    print(f"⚠️ [Master Agent] Error in {agent_name}: {e}")
+                    intelligence[agent_name] = ("HOLD", 0.5)
+            
+            # Calculate technical indicators
+            intelligence['technical'] = self._calculate_technical_indicators(df)
+            
+            return intelligence
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error gathering market intelligence: {e}")
+            return {'error': str(e)}
+    
+    def _calculate_technical_indicators(self, df):
+        """Calculate key technical indicators for decision making"""
+        try:
+            current_price = df["close"].iloc[-1]
+            
+            # ATR for volatility
+            from ta.volatility import AverageTrueRange
+            atr = AverageTrueRange(df["high"], df["low"], df["close"], window=14)
+            current_atr = atr.average_true_range().iloc[-1]
+            
+            # RSI for momentum
+            from ta.momentum import RSIIndicator
+            rsi = RSIIndicator(df["close"], window=14)
+            current_rsi = rsi.rsi().iloc[-1]
+            
+            # Moving averages for trend
+            sma_20 = df["close"].rolling(20).mean().iloc[-1]
+            sma_50 = df["close"].rolling(50).mean().iloc[-1] if len(df) >= 50 else sma_20
+            
+            # Bollinger Bands for volatility context
+            from ta.volatility import BollingerBands
+            bb = BollingerBands(df["close"], window=20, window_dev=2)
+            bb_upper = bb.bollinger_hband().iloc[-1]
+            bb_lower = bb.bollinger_lband().iloc[-1]
+            bb_position = (current_price - bb_lower) / (bb_upper - bb_lower)
+            
+            return {
+                'atr': current_atr,
+                'atr_pct': current_atr / current_price,
+                'rsi': current_rsi,
+                'bb_position': bb_position,
+                'price_vs_sma20': current_price / sma_20,
+                'price_vs_sma50': current_price / sma_50,
+                'sma_trend': 1 if sma_20 > sma_50 else -1,
+                'current_price': current_price
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating technical indicators: {e}")
+            return {}
+    
+    def _calculate_atr_based_levels(self, symbol, entry_price, market_data):
+        """Calculate TP/SL levels based on ATR"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 20:
+                return None
+            
+            # Calculate ATR
+            from ta.volatility import AverageTrueRange
+            atr_indicator = AverageTrueRange(df["high"], df["low"], df["close"], window=14)
+            atr_value = atr_indicator.average_true_range().iloc[-1]
+            
+            # Get symbol-specific multipliers from config
+            symbol_config = ENTRY_TP_SL_CONFIG.get(symbol, {})
+            
+            tp_multiplier = symbol_config.get('atr_multiplier_tp', 3.0)
+            sl_multiplier = symbol_config.get('atr_multiplier_sl', 2.0)
+            
+            return {
+                'atr_value': atr_value,
+                'tp_multiplier': tp_multiplier,
+                'sl_multiplier': sl_multiplier,
+                'tp_distance': atr_value * tp_multiplier,
+                'sl_distance': atr_value * sl_multiplier
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating ATR levels: {e}")
+            return None
+    
+    def _calculate_volatility_adjusted_levels(self, symbol, entry_price, direction, market_intelligence):
+        """Calculate TP/SL levels adjusted for current volatility"""
+        try:
+            if 'technical' not in market_intelligence:
+                return None
+                
+            technical = market_intelligence['technical']
+            volatility_pct = technical.get('atr_pct', 0.01)
+            bb_position = technical.get('bb_position', 0.5)
+            
+            # Adjust multipliers based on volatility
+            if volatility_pct > 0.03:  # High volatility
+                tp_mult = 4.0
+                sl_mult = 1.5
+            elif volatility_pct > 0.015:  # Medium volatility
+                tp_mult = 3.0
+                sl_mult = 2.0
+            else:  # Low volatility
+                tp_mult = 2.5
+                sl_mult = 2.5
+            
+            # Adjust based on Bollinger Band position
+            if bb_position > 0.8:  # Near upper band
+                tp_mult *= 0.8  # Reduce TP
+                sl_mult *= 1.2  # Increase SL
+            elif bb_position < 0.2:  # Near lower band
+                tp_mult *= 0.8
+                sl_mult *= 1.2
+            
+            base_distance = entry_price * volatility_pct
+            
+            return {
+                'tp_distance': base_distance * tp_mult,
+                'sl_distance': base_distance * sl_mult,
+                'volatility_score': volatility_pct,
+                'bb_position': bb_position
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating volatility levels: {e}")
+            return None
+    
+    def _calculate_trend_based_levels(self, symbol, entry_price, direction, market_intelligence):
+        """Calculate TP/SL levels based on trend strength"""
+        try:
+            if 'technical' not in market_intelligence:
+                return None
+                
+            technical = market_intelligence['technical']
+            trend_strength = technical.get('sma_trend', 0)
+            price_vs_sma20 = technical.get('price_vs_sma20', 1.0)
+            
+            # Get trend analysis from specialist agent
+            trend_signal, trend_confidence = market_intelligence.get('trend_analyzer', ('HOLD', 0.5))
+            
+            # Adjust levels based on trend alignment
+            if direction.upper() == 'BUY':
+                if trend_strength > 0 and price_vs_sma20 > 1.01:  # Strong uptrend
+                    tp_mult = 3.5 * trend_confidence
+                    sl_mult = 1.5
+                else:  # Weak or counter-trend
+                    tp_mult = 2.0
+                    sl_mult = 2.5
+            else:  # SELL
+                if trend_strength < 0 and price_vs_sma20 < 0.99:  # Strong downtrend
+                    tp_mult = 3.5 * trend_confidence
+                    sl_mult = 1.5
+                else:  # Weak or counter-trend
+                    tp_mult = 2.0
+                    sl_mult = 2.5
+            
+            base_distance = entry_price * 0.01  # 1% base
+            
+            return {
+                'tp_distance': base_distance * tp_mult,
+                'sl_distance': base_distance * sl_mult,
+                'trend_strength': trend_strength,
+                'trend_confidence': trend_confidence
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating trend levels: {e}")
+            return None
+    
+    def _calculate_support_resistance_levels(self, symbol, market_data):
+        """Calculate support/resistance levels for TP/SL placement"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 50:
+                return None
+            
+            current_price = df["close"].iloc[-1]
+            
+            # Calculate pivot points
+            high = df["high"].iloc[-1]
+            low = df["low"].iloc[-1]
+            close = df["close"].iloc[-1]
+            
+            pivot = (high + low + close) / 3
+            r1 = 2 * pivot - low
+            s1 = 2 * pivot - high
+            r2 = pivot + (high - low)
+            s2 = pivot - (high - low)
+            
+            # Find recent highs and lows
+            recent_highs = df["high"].rolling(20).max().dropna()
+            recent_lows = df["low"].rolling(20).min().dropna()
+            
+            resistance_levels = [r1, r2] + recent_highs.tail(5).tolist()
+            support_levels = [s1, s2] + recent_lows.tail(5).tolist()
+            
+            # Find closest levels
+            resistance_above = [r for r in resistance_levels if r > current_price]
+            support_below = [s for s in support_levels if s < current_price]
+            
+            nearest_resistance = min(resistance_above) if resistance_above else current_price * 1.02
+            nearest_support = max(support_below) if support_below else current_price * 0.98
+            
+            return {
+                'nearest_resistance': nearest_resistance,
+                'nearest_support': nearest_support,
+                'pivot': pivot,
+                'resistance_distance': nearest_resistance - current_price,
+                'support_distance': current_price - nearest_support
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating S/R levels: {e}")
+            return None
+    
+    def _fuse_tp_sl_decisions(self, symbol, entry_price, direction, atr_levels, volatility_levels, trend_levels, sr_levels, market_intelligence):
+        """Intelligent fusion of multiple TP/SL calculation methods"""
+        try:
+            tp_distances = []
+            sl_distances = []
+            weights = []
+            
+            # Collect TP/SL distances from different methods
+            if atr_levels:
+                tp_distances.append(atr_levels['tp_distance'])
+                sl_distances.append(atr_levels['sl_distance'])
+                weights.append(self.decision_weights['atr_weight'])
+            
+            if volatility_levels:
+                tp_distances.append(volatility_levels['tp_distance'])
+                sl_distances.append(volatility_levels['sl_distance'])
+                weights.append(self.decision_weights['volatility_weight'])
+            
+            if trend_levels:
+                tp_distances.append(trend_levels['tp_distance'])
+                sl_distances.append(trend_levels['sl_distance'])
+                weights.append(self.decision_weights['trend_weight'])
+            
+            if sr_levels:
+                # Use S/R levels to cap TP/SL distances
+                if direction.upper() == 'BUY':
+                    max_tp_distance = sr_levels['resistance_distance'] * 0.8  # 80% to resistance
+                    max_sl_distance = sr_levels['support_distance'] * 0.8   # 80% to support
+                else:
+                    max_tp_distance = sr_levels['support_distance'] * 0.8
+                    max_sl_distance = sr_levels['resistance_distance'] * 0.8
+                
+                tp_distances.append(max_tp_distance)
+                sl_distances.append(max_sl_distance)
+                weights.append(self.decision_weights['support_resistance_weight'])
+            
+            # Calculate weighted averages
+            if tp_distances and sl_distances:
+                total_weight = sum(weights)
+                if total_weight > 0:
+                    weighted_tp_distance = sum(tp * w for tp, w in zip(tp_distances, weights)) / total_weight
+                    weighted_sl_distance = sum(sl * w for sl, w in zip(sl_distances, weights)) / total_weight
+                else:
+                    weighted_tp_distance = sum(tp_distances) / len(tp_distances)
+                    weighted_sl_distance = sum(sl_distances) / len(sl_distances)
+            else:
+                # Fallback to percentage-based
+                weighted_tp_distance = entry_price * 0.02  # 2%
+                weighted_sl_distance = entry_price * 0.01  # 1%
+            
+            # Calculate final TP/SL levels
+            if direction.upper() == 'BUY':
+                take_profit = entry_price + weighted_tp_distance
+                stop_loss = entry_price - weighted_sl_distance
+            else:
+                take_profit = entry_price - weighted_tp_distance
+                stop_loss = entry_price + weighted_sl_distance
+            
+            # Calculate risk-reward ratio
+            risk_distance = abs(stop_loss - entry_price)
+            reward_distance = abs(take_profit - entry_price)
+            risk_reward_ratio = reward_distance / risk_distance if risk_distance > 0 else 2.0
+            
+            return {
+                'take_profit': take_profit,
+                'stop_loss': stop_loss,
+                'tp_distance': weighted_tp_distance,
+                'sl_distance': weighted_sl_distance,
+                'risk_reward_ratio': risk_reward_ratio,
+                'fusion_weights': dict(zip(['atr', 'volatility', 'trend', 'sr'], weights)),
+                'reasoning': {
+                    'method': 'weighted_fusion',
+                    'inputs_used': len(tp_distances),
+                    'total_weight': sum(weights)
+                }
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in fusion algorithm: {e}")
+            return self._get_fallback_tp_sl_levels(entry_price, direction)
+    
+    def _optimize_risk_reward_ratio(self, levels, entry_price, direction):
+        """Optimize the risk-reward ratio within acceptable bounds"""
+        try:
+            current_rr = levels['risk_reward_ratio']
+            
+            # Check if adjustment is needed
+            if self.min_risk_reward_ratio <= current_rr <= self.max_risk_reward_ratio:
+                return levels  # No adjustment needed
+            
+            # Calculate base distances
+            risk_distance = abs(levels['stop_loss'] - entry_price)
+            
+            # Adjust to meet minimum RR ratio
+            if current_rr < self.min_risk_reward_ratio:
+                target_reward_distance = risk_distance * self.min_risk_reward_ratio
+                
+                if direction.upper() == 'BUY':
+                    optimized_tp = entry_price + target_reward_distance
+                else:
+                    optimized_tp = entry_price - target_reward_distance
+                
+                levels['take_profit'] = optimized_tp
+                levels['tp_distance'] = target_reward_distance
+                levels['risk_reward_ratio'] = self.min_risk_reward_ratio
+                levels['reasoning']['optimization'] = f'Adjusted TP to meet min RR {self.min_risk_reward_ratio}'
+            
+            # Adjust to meet maximum RR ratio
+            elif current_rr > self.max_risk_reward_ratio:
+                target_reward_distance = risk_distance * self.max_risk_reward_ratio
+                
+                if direction.upper() == 'BUY':
+                    optimized_tp = entry_price + target_reward_distance
+                else:
+                    optimized_tp = entry_price - target_reward_distance
+                
+                levels['take_profit'] = optimized_tp
+                levels['tp_distance'] = target_reward_distance
+                levels['risk_reward_ratio'] = self.max_risk_reward_ratio
+                levels['reasoning']['optimization'] = f'Adjusted TP to meet max RR {self.max_risk_reward_ratio}'
+            
+            return levels
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in RR optimization: {e}")
+            return levels
+    
+    def _get_fallback_tp_sl_levels(self, entry_price, direction):
+        """Fallback TP/SL levels when calculations fail"""
+        if direction.upper() == 'BUY':
+            return {
+                'take_profit': entry_price * 1.02,  # 2% profit
+                'stop_loss': entry_price * 0.99,    # 1% loss
+                'tp_distance': entry_price * 0.02,
+                'sl_distance': entry_price * 0.01,
+                'risk_reward_ratio': 2.0,
+                'reasoning': {'fallback': True, 'method': 'percentage_based'}
+            }
+        else:
+            return {
+                'take_profit': entry_price * 0.98,  # 2% profit
+                'stop_loss': entry_price * 1.01,    # 1% loss
+                'tp_distance': entry_price * 0.02,
+                'sl_distance': entry_price * 0.01,
+                'risk_reward_ratio': 2.0,
+                'reasoning': {'fallback': True, 'method': 'percentage_based'}
+            }
+    
+    def _store_tp_sl_decision(self, symbol, entry_price, direction, levels, market_intelligence):
+        """Store TP/SL decision for performance tracking and learning"""
+        try:
+            self.tp_sl_history[symbol] = {
+                'timestamp': datetime.now(),
+                'entry_price': entry_price,
+                'direction': direction,
+                'take_profit': levels['take_profit'],
+                'stop_loss': levels['stop_loss'],
+                'risk_reward_ratio': levels['risk_reward_ratio'],
+                'market_intelligence': market_intelligence,
+                'reasoning': levels.get('reasoning', {}),
+                'status': 'active'
+            }
+        except Exception as e:
+            print(f"❌ [Master Agent] Error storing decision: {e}")
+    
+    # === TRAILING STOP METHODS ===
+    
+    def _assess_trend_strength(self, market_intelligence):
+        """Assess the strength of the current trend"""
+        try:
+            trend_signal, trend_confidence = market_intelligence.get('trend_analyzer', ('HOLD', 0.5))
+            technical = market_intelligence.get('technical', {})
+            
+            # Combine trend signal confidence with technical indicators
+            sma_trend = technical.get('sma_trend', 0)
+            price_vs_sma20 = technical.get('price_vs_sma20', 1.0)
+            
+            # Calculate composite trend strength
+            if trend_signal == 'BUY' and sma_trend > 0:
+                strength = trend_confidence * min(price_vs_sma20, 1.1)  # Cap at 10% above SMA
+            elif trend_signal == 'SELL' and sma_trend < 0:
+                strength = trend_confidence * min(2 - price_vs_sma20, 1.1)  # Inverse for downtrend
+            else:
+                strength = trend_confidence * 0.5  # Reduce strength for conflicting signals
+            
+            return min(strength, 1.0)  # Cap at 1.0
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error assessing trend strength: {e}")
+            return 0.5
+    
+    def _assess_volatility_level(self, market_intelligence):
+        """Assess the current volatility level"""
+        try:
+            technical = market_intelligence.get('technical', {})
+            atr_pct = technical.get('atr_pct', 0.01)
+            bb_position = technical.get('bb_position', 0.5)
+            
+            # Normalize volatility score
+            if atr_pct > 0.03:
+                volatility_score = 1.0  # High volatility
+            elif atr_pct > 0.015:
+                volatility_score = 0.7  # Medium volatility
+            else:
+                volatility_score = 0.3  # Low volatility
+            
+            # Adjust based on Bollinger Band position (extreme positions indicate volatility)
+            if bb_position > 0.8 or bb_position < 0.2:
+                volatility_score = min(volatility_score + 0.2, 1.0)
+            
+            return volatility_score
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error assessing volatility: {e}")
+            return 0.5
+    
+    def _check_momentum_confirmation(self, market_data, direction):
+        """Check if momentum confirms the trade direction"""
+        try:
+            df = market_data.get('price_data')
+            if df is None or len(df) < 14:
+                return False
+            
+            # Calculate RSI for momentum
+            from ta.momentum import RSIIndicator
+            rsi = RSIIndicator(df["close"], window=14)
+            current_rsi = rsi.rsi().iloc[-1]
+            
+            if direction.upper() == 'BUY':
+                # For BUY positions, RSI should be above 50 but not overbought
+                return 50 < current_rsi < 80
+            else:
+                # For SELL positions, RSI should be below 50 but not oversold
+                return 20 < current_rsi < 50
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error checking momentum: {e}")
+            return False
+    
+    def _check_sr_proximity(self, current_price, market_data):
+        """Check proximity to support/resistance levels"""
+        try:
+            sr_levels = self._calculate_support_resistance_levels('', market_data)
+            if not sr_levels:
+                return True  # No S/R constraints
+            
+            nearest_resistance = sr_levels['nearest_resistance']
+            nearest_support = sr_levels['nearest_support']
+            
+            # Check if price is too close to S/R levels (within 1%)
+            resistance_distance_pct = abs(nearest_resistance - current_price) / current_price
+            support_distance_pct = abs(nearest_support - current_price) / current_price
+            
+            # Return True if not too close to major S/R levels
+            return resistance_distance_pct > 0.01 and support_distance_pct > 0.01
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error checking S/R proximity: {e}")
+            return True
+    
+    def _apply_trailing_stop_logic(self, decision_factors, profit_pct):
+        """Apply intelligent logic to decide on trailing stop activation"""
+        try:
+            reasons = []
+            score = 0
+            max_score = 5
+            
+            # Factor 1: Profit threshold (mandatory)
+            if decision_factors['profit_threshold']:
+                score += 2
+                reasons.append(f"Profit threshold met ({profit_pct:.2%})")
+            else:
+                return {
+                    'should_activate': False,
+                    'reasons': [f"Insufficient profit ({profit_pct:.2%} < 1.5%)"],
+                    'confidence': 0.1
+                }
+            
+            # Factor 2: Trend strength
+            trend_strength = decision_factors['trend_strength']
+            if trend_strength > 0.7:
+                score += 1
+                reasons.append(f"Strong trend continuation ({trend_strength:.2f})")
+            elif trend_strength > 0.5:
+                score += 0.5
+                reasons.append(f"Moderate trend strength ({trend_strength:.2f})")
+            
+            # Factor 3: Volatility level
+            volatility_level = decision_factors['volatility_level']
+            if volatility_level > 0.7:
+                score += 0.5
+                reasons.append(f"High volatility - protective trailing needed")
+            elif volatility_level < 0.4:
+                score += 0.5
+                reasons.append(f"Low volatility - stable for trailing")
+            
+            # Factor 4: Momentum confirmation
+            if decision_factors['momentum_confirmation']:
+                score += 1
+                reasons.append("Momentum confirms direction")
+            
+            # Factor 5: S/R proximity
+            if decision_factors['support_resistance']:
+                score += 0.5
+                reasons.append("Clear of major S/R levels")
+            
+            # Decision logic
+            confidence = score / max_score
+            should_activate = score >= 2.5  # Need at least 50% score
+            
+            if not should_activate:
+                reasons = ["Insufficient conditions for trailing stop activation"]
+            
+            return {
+                'should_activate': should_activate,
+                'reasons': reasons,
+                'confidence': confidence,
+                'score': score,
+                'max_score': max_score
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in trailing stop logic: {e}")
+            return {
+                'should_activate': False,
+                'reasons': ['Error in analysis'],
+                'confidence': 0.0
+            }
+    
+    def _calculate_optimal_trailing_distance(self, symbol, current_price, market_intelligence, profit_pct):
+        """Calculate optimal trailing stop distance based on market conditions"""
+        try:
+            technical = market_intelligence.get('technical', {})
+            atr_pct = technical.get('atr_pct', 0.01)
+            volatility_level = self._assess_volatility_level(market_intelligence)
+            
+            # Base distance as percentage of current price
+            base_distance_pct = atr_pct * 2  # 2x ATR as base
+            
+            # Adjust based on volatility
+            if volatility_level > 0.8:
+                volatility_multiplier = 1.5  # Wider trailing for high volatility
+            elif volatility_level > 0.5:
+                volatility_multiplier = 1.2
+            else:
+                volatility_multiplier = 1.0
+            
+            # Adjust based on profit level
+            if profit_pct > 0.05:  # >5% profit
+                profit_multiplier = 0.8  # Tighter trailing for large profits
+            elif profit_pct > 0.03:  # >3% profit
+                profit_multiplier = 0.9
+            else:
+                profit_multiplier = 1.0
+            
+            # Calculate final distance
+            final_distance_pct = base_distance_pct * volatility_multiplier * profit_multiplier
+            
+            # Apply bounds
+            min_distance_pct = 0.005  # 0.5% minimum
+            max_distance_pct = 0.03   # 3% maximum
+            
+            final_distance_pct = max(min_distance_pct, min(final_distance_pct, max_distance_pct))
+            
+            # Convert to price distance
+            trailing_distance = current_price * final_distance_pct
+            
+            print(f"🎯 [Master Agent] Trailing distance calculation:")
+            print(f"   Base (2xATR): {base_distance_pct:.3%}")
+            print(f"   Volatility multiplier: {volatility_multiplier:.2f}")
+            print(f"   Profit multiplier: {profit_multiplier:.2f}")
+            print(f"   Final distance: {final_distance_pct:.3%} ({trailing_distance:.5f})")
+            
+            return trailing_distance
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating trailing distance: {e}")
+            return current_price * 0.01  # 1% fallback
+    
+    # === PERFORMANCE TRACKING AND LEARNING ===
+    
+    def update_tp_sl_performance(self, symbol, outcome, actual_exit_price=None):
+        """Update performance metrics for TP/SL decisions"""
+        try:
+            if symbol not in self.tp_sl_history:
+                return
+            
+            decision_data = self.tp_sl_history[symbol]
+            entry_price = decision_data['entry_price']
+            direction = decision_data['direction']
+            tp_level = decision_data['take_profit']
+            sl_level = decision_data['stop_loss']
+            
+            # Calculate actual performance
+            if actual_exit_price:
+                if direction.upper() == 'BUY':
+                    actual_return = (actual_exit_price - entry_price) / entry_price
+                else:
+                    actual_return = (entry_price - actual_exit_price) / entry_price
+                
+                # Determine if TP or SL was hit
+                if direction.upper() == 'BUY':
+                    hit_tp = actual_exit_price >= tp_level
+                    hit_sl = actual_exit_price <= sl_level
+                else:
+                    hit_tp = actual_exit_price <= tp_level
+                    hit_sl = actual_exit_price >= sl_level
+                
+                # Update performance metrics
+                if symbol not in self.performance_metrics:
+                    self.performance_metrics[symbol] = {
+                        'total_decisions': 0,
+                        'tp_hits': 0,
+                        'sl_hits': 0,
+                        'avg_return': 0,
+                        'win_rate': 0,
+                        'avg_rr_achieved': 0
+                    }
+                
+                metrics = self.performance_metrics[symbol]
+                metrics['total_decisions'] += 1
+                
+                if hit_tp:
+                    metrics['tp_hits'] += 1
+                elif hit_sl:
+                    metrics['sl_hits'] += 1
+                
+                # Update running averages
+                metrics['avg_return'] = (metrics['avg_return'] * (metrics['total_decisions'] - 1) + actual_return) / metrics['total_decisions']
+                metrics['win_rate'] = metrics['tp_hits'] / metrics['total_decisions']
+                
+                # Calculate achieved risk-reward ratio
+                if hit_tp or hit_sl:
+                    risk = abs(sl_level - entry_price)
+                    reward = abs(actual_exit_price - entry_price)
+                    achieved_rr = reward / risk if risk > 0 else 0
+                    metrics['avg_rr_achieved'] = (metrics['avg_rr_achieved'] * (metrics['total_decisions'] - 1) + achieved_rr) / metrics['total_decisions']
+                
+                print(f"📊 [Master Agent] Updated performance for {symbol}:")
+                print(f"   Win Rate: {metrics['win_rate']:.2%}")
+                print(f"   Avg Return: {metrics['avg_return']:.2%}")
+                print(f"   Avg RR Achieved: {metrics['avg_rr_achieved']:.2f}")
+                
+                # Learn from the outcome
+                self._learn_from_outcome(symbol, decision_data, outcome, actual_return)
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error updating performance: {e}")
+    
+    def _learn_from_outcome(self, symbol, decision_data, outcome, actual_return):
+        """Learn from trading outcomes to improve future decisions"""
+        try:
+            market_intelligence = decision_data.get('market_intelligence', {})
+            reasoning = decision_data.get('reasoning', {})
+            
+            # Analyze what worked and what didn't
+            if outcome == 'TP_HIT' and actual_return > 0:
+                # Successful trade - reinforce successful patterns
+                self._reinforce_successful_patterns(symbol, market_intelligence, reasoning)
+            elif outcome == 'SL_HIT' and actual_return < 0:
+                # Failed trade - learn from mistakes
+                self._learn_from_failures(symbol, market_intelligence, reasoning)
+            
+            # Adjust decision weights based on performance
+            self._adjust_decision_weights(symbol, market_intelligence, actual_return)
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in learning process: {e}")
+    
+    def _reinforce_successful_patterns(self, symbol, market_intelligence, reasoning):
+        """Reinforce patterns that led to successful trades"""
+        try:
+            # Identify successful conditions
+            technical = market_intelligence.get('technical', {})
+            volatility_pct = technical.get('atr_pct', 0.01)
+            trend_strength = market_intelligence.get('trend_analyzer', ('HOLD', 0.5))[1]
+            
+            # Slightly increase weights for conditions that worked
+            if volatility_pct < 0.015 and trend_strength > 0.7:
+                # Low volatility + strong trend = good conditions
+                self.decision_weights['trend_weight'] = min(0.25, self.decision_weights['trend_weight'] * 1.05)
+            elif volatility_pct > 0.03:
+                # High volatility worked - increase volatility weight
+                self.decision_weights['volatility_weight'] = min(0.3, self.decision_weights['volatility_weight'] * 1.02)
+            
+            print(f"🎯 [Master Agent] Reinforced successful patterns for {symbol}")
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error reinforcing patterns: {e}")
+    
+    def _learn_from_failures(self, symbol, market_intelligence, reasoning):
+        """Learn from failed trades to avoid similar mistakes"""
+        try:
+            # Identify failure conditions
+            technical = market_intelligence.get('technical', {})
+            volatility_pct = technical.get('atr_pct', 0.01)
+            bb_position = technical.get('bb_position', 0.5)
+            
+            # Adjust weights to reduce influence of factors that led to failure
+            if bb_position > 0.8 or bb_position < 0.2:
+                # Extreme Bollinger Band positions led to failure
+                self.decision_weights['volatility_weight'] = max(0.15, self.decision_weights['volatility_weight'] * 0.95)
+            
+            if volatility_pct > 0.03:
+                # High volatility led to failure - be more conservative
+                self.decision_weights['atr_weight'] = max(0.25, self.decision_weights['atr_weight'] * 0.98)
+            
+            print(f"📚 [Master Agent] Learned from failure for {symbol}")
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error learning from failure: {e}")
+    
+    def _adjust_decision_weights(self, symbol, market_intelligence, actual_return):
+        """Dynamically adjust decision weights based on performance"""
+        try:
+            # Get symbol performance metrics
+            if symbol in self.performance_metrics:
+                metrics = self.performance_metrics[symbol]
+                win_rate = metrics['win_rate']
+                
+                # Adjust weights based on overall performance
+                if win_rate > 0.6:  # Good performance
+                    # Slightly increase confidence in current approach
+                    for key in self.decision_weights:
+                        self.decision_weights[key] = min(0.4, self.decision_weights[key] * 1.01)
+                elif win_rate < 0.4:  # Poor performance
+                    # Rebalance weights towards more conservative approach
+                    self.decision_weights['atr_weight'] = min(0.35, self.decision_weights['atr_weight'] * 1.02)
+                    self.decision_weights['support_resistance_weight'] = min(0.2, self.decision_weights['support_resistance_weight'] * 1.02)
+                
+                # Normalize weights to sum to 1.0
+                total_weight = sum(self.decision_weights.values())
+                for key in self.decision_weights:
+                    self.decision_weights[key] /= total_weight
+                
+                print(f"⚖️ [Master Agent] Adjusted decision weights for {symbol} (Win Rate: {win_rate:.2%})")
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error adjusting weights: {e}")
+    
+    def get_performance_summary(self):
+        """Get comprehensive performance summary"""
+        try:
+            if not self.performance_metrics:
+                return {"message": "No performance data available"}
+            
+            summary = {
+                'total_symbols': len(self.performance_metrics),
+                'overall_metrics': {
+                    'avg_win_rate': 0,
+                    'avg_return': 0,
+                    'total_decisions': 0,
+                    'best_symbol': None,
+                    'worst_symbol': None
+                },
+                'symbol_breakdown': {},
+                'decision_weights': self.decision_weights.copy()
+            }
+            
+            total_win_rate = 0
+            total_return = 0
+            total_decisions = 0
+            best_performance = -999
+            worst_performance = 999
+            
+            for symbol, metrics in self.performance_metrics.items():
+                summary['symbol_breakdown'][symbol] = metrics.copy()
+                
+                total_win_rate += metrics['win_rate']
+                total_return += metrics['avg_return']
+                total_decisions += metrics['total_decisions']
+                
+                if metrics['avg_return'] > best_performance:
+                    best_performance = metrics['avg_return']
+                    summary['overall_metrics']['best_symbol'] = symbol
+                
+                if metrics['avg_return'] < worst_performance:
+                    worst_performance = metrics['avg_return']
+                    summary['overall_metrics']['worst_symbol'] = symbol
+            
+            # Calculate overall averages
+            num_symbols = len(self.performance_metrics)
+            summary['overall_metrics']['avg_win_rate'] = total_win_rate / num_symbols
+            summary['overall_metrics']['avg_return'] = total_return / num_symbols
+            summary['overall_metrics']['total_decisions'] = total_decisions
+            
+            return summary
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error generating performance summary: {e}")
+            return {"error": str(e)}
+
 class AdvancedEnsembleManager:
     """Advanced Ensemble System with Bagging, Boosting, v Stacking"""
     
@@ -12778,9 +13762,10 @@ class EnhancedTradingBot:
         # Transfer Learning Support
         self.transfer_learning_manager = TransferLearningManager()
         
-        # Advanced Master Agent System
-        self.master_agent_coordinator = MasterAgentCoordinator()
-        self.master_agent_coordinator.initialize_specialist_agents()
+        # Advanced Master Agent System for TP/SL Decisions
+        print("🎯 [Bot Init] Initializing Master Agent for TP/SL decisions...")
+        self.master_agent = MasterAgent()
+        print("✅ [Bot Init] Master Agent initialized successfully")
         
         # Advanced Ensemble System
         self.ensemble_manager = AdvancedEnsembleManager()
@@ -17518,6 +18503,9 @@ class EnhancedTradingBot:
         # 5. Position management
         await self._handle_position_management(live_data_cache)
         
+        # 5.1. Master Agent trailing stop management
+        self._apply_master_agent_trailing_stops()
+        
         # 6. Trading strategy execution
         await self._handle_trading_strategy(live_data_cache)
         
@@ -17636,6 +18624,154 @@ class EnhancedTradingBot:
         for symbol, pos in self.open_positions.items():
             print(f"   - {symbol}: {pos['signal']} @ {pos['entry_price']:.5f}")
         print(f"   - Tng v th : {len(self.open_positions)}/{RISK_MANAGEMENT['MAX_OPEN_POSITIONS']}")
+    
+    # === MASTER AGENT INTEGRATION METHODS ===
+    
+    def _get_master_agent_tp_sl_decision(self, symbol, entry_price, direction, market_data):
+        """Get TP/SL decision from Master Agent"""
+        try:
+            print(f"🎯 [Trading Bot] Consulting Master Agent for {symbol} TP/SL decision...")
+            
+            # Use Master Agent to decide TP/SL levels
+            tp_sl_decision = self.master_agent.decide_tp_sl_levels(
+                symbol, entry_price, direction, market_data
+            )
+            
+            return tp_sl_decision
+            
+        except Exception as e:
+            print(f"❌ [Trading Bot] Error consulting Master Agent: {e}")
+            # Fallback to default calculation
+            return self._get_fallback_tp_sl_calculation(symbol, entry_price, direction)
+    
+    def _get_master_agent_trailing_decision(self, symbol, current_price, entry_price, direction, market_data):
+        """Get trailing stop decision from Master Agent"""
+        try:
+            print(f"🎯 [Trading Bot] Consulting Master Agent for {symbol} trailing stop...")
+            
+            # Use Master Agent to decide trailing stop activation
+            trailing_decision = self.master_agent.decide_trailing_stop_activation(
+                symbol, current_price, entry_price, direction, market_data
+            )
+            
+            return trailing_decision
+            
+        except Exception as e:
+            print(f"❌ [Trading Bot] Error consulting Master Agent for trailing: {e}")
+            return {
+                'should_activate': False,
+                'reasons': ['Master Agent error'],
+                'current_profit_pct': 0,
+                'recommended_distance': current_price * 0.01
+            }
+    
+    def _get_fallback_tp_sl_calculation(self, symbol, entry_price, direction):
+        """Fallback TP/SL calculation when Master Agent fails"""
+        # Get symbol configuration
+        symbol_config = ENTRY_TP_SL_CONFIG.get(symbol, ENTRY_TP_SL_CONFIG.get("EURUSD", {}))
+        
+        # Default multipliers
+        tp_mult = symbol_config.get('atr_multiplier_tp', 3.0)
+        sl_mult = symbol_config.get('atr_multiplier_sl', 2.0)
+        
+        # Simple percentage-based calculation
+        if direction.upper() == 'BUY':
+            tp_distance = entry_price * (tp_mult * 0.01)  # Convert to percentage
+            sl_distance = entry_price * (sl_mult * 0.01)
+            
+            return {
+                'take_profit': entry_price + tp_distance,
+                'stop_loss': entry_price - sl_distance,
+                'tp_distance': tp_distance,
+                'sl_distance': sl_distance,
+                'risk_reward_ratio': tp_mult / sl_mult,
+                'reasoning': {'fallback': True, 'method': 'config_based'}
+            }
+        else:
+            tp_distance = entry_price * (tp_mult * 0.01)
+            sl_distance = entry_price * (sl_mult * 0.01)
+            
+            return {
+                'take_profit': entry_price - tp_distance,
+                'stop_loss': entry_price + sl_distance,
+                'tp_distance': tp_distance,
+                'sl_distance': sl_distance,
+                'risk_reward_ratio': tp_mult / sl_mult,
+                'reasoning': {'fallback': True, 'method': 'config_based'}
+            }
+    
+    def _apply_master_agent_trailing_stops(self):
+        """Apply Master Agent trailing stop logic to open positions"""
+        try:
+            if not self.open_positions:
+                return
+            
+            print("🎯 [Master Agent Integration] Checking trailing stops for open positions...")
+            
+            for symbol, position in self.open_positions.items():
+                try:
+                    # Get current market data
+                    current_data = self.data_manager.fetch_multi_timeframe_data(symbol, count=100)
+                    if not current_data:
+                        continue
+                    
+                    primary_tf = PRIMARY_TIMEFRAME_BY_SYMBOL.get(symbol, PRIMARY_TIMEFRAME)
+                    df = current_data.get(primary_tf)
+                    if df is None or df.empty:
+                        continue
+                    
+                    current_price = df['close'].iloc[-1]
+                    entry_price = position.get('entry_price', current_price)
+                    direction = position.get('signal', 'BUY')
+                    
+                    # Prepare market data for Master Agent
+                    market_data = {'price_data': df}
+                    
+                    # Get trailing stop decision from Master Agent
+                    trailing_decision = self._get_master_agent_trailing_decision(
+                        symbol, current_price, entry_price, direction, market_data
+                    )
+                    
+                    # Apply trailing stop if recommended
+                    if trailing_decision['should_activate']:
+                        print(f"✅ [Master Agent] Activating trailing stop for {symbol}")
+                        print(f"   Current Price: {current_price:.5f}")
+                        print(f"   Profit: {trailing_decision['current_profit_pct']:.2%}")
+                        print(f"   Trailing Distance: {trailing_decision['recommended_distance']:.5f}")
+                        
+                        # Update position with trailing stop
+                        position['trailing_stop'] = True
+                        position['trailing_distance'] = trailing_decision['recommended_distance']
+                        position['trailing_stop_price'] = self._calculate_trailing_stop_price(
+                            current_price, direction, trailing_decision['recommended_distance']
+                        )
+                        
+                        # Save updated position
+                        save_open_positions(self.open_positions)
+                        
+                        # Send notification
+                        self.send_discord_alert(
+                            f"🎯 **Master Agent Trailing Stop Activated**\n\n"
+                            f"**Symbol:** {symbol}\n"
+                            f"**Direction:** {direction}\n"
+                            f"**Current Profit:** {trailing_decision['current_profit_pct']:.2%}\n"
+                            f"**Trailing Distance:** {trailing_decision['recommended_distance']:.5f}\n"
+                            f"**Reasons:** {', '.join(trailing_decision['reasons'])}"
+                        )
+                    
+                except Exception as e:
+                    print(f"❌ [Master Agent] Error processing trailing stop for {symbol}: {e}")
+                    continue
+            
+        except Exception as e:
+            print(f"❌ [Master Agent Integration] Error in trailing stop application: {e}")
+    
+    def _calculate_trailing_stop_price(self, current_price, direction, trailing_distance):
+        """Calculate trailing stop price based on direction and distance"""
+        if direction.upper() == 'BUY':
+            return current_price - trailing_distance
+        else:
+            return current_price + trailing_distance
 
     def calculate_price_action_score(self, df_features):
         """
