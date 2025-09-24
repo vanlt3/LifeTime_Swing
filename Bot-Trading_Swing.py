@@ -6225,6 +6225,94 @@ class NewsEconomicManager:
             return {"score": 0.0, "reasoning": "No newfixvailable."}
         return self.llm_analyzer.analyze_sentiment_of_news(news_items)
 
+    def add_news_sentiment_features(self, df, symbol):
+        """
+        IMPORTANT: All news sentiment data is integrated into DataFrame.
+        Phase 2: News Sentiment Features - needs RETRAIN MODEL
+        """
+        print(f" [NewsFeatures] Starting to add news sentiment features for {symbol}...")
+        logging.info(f"   [Features] Starting to add news sentiment features for {symbol}...")
+        
+        try:
+            # Initialize news sentiment features
+            df["news_sentiment_score"] = 0.0
+            df["news_sentiment_volume"] = 0
+            df["news_quality_score"] = 0.0
+            df["news_timing_score"] = 0.0
+            df["news_sentiment_trend"] = 0.0
+            df["news_impact_score"] = 0.0
+            
+            print(f"[NewsFeatures] Initialized news features columns for {symbol}")
+            
+            # Get news data for the time period
+            start_date = df.index.min()
+            end_date = df.index.max()
+            
+            print(f" [NewsFeatures] Processing period: {start_date} to {end_date}")
+            
+            # Simulate news sentiment data (in real implementation, this would fetcontainsctual news)
+            # For now, we'll create synthetic features based on market conditions
+            
+            for i, (timestamp, row) in enumerate(df.iterrows()):
+                try:
+                    # Simulate news sentiment based on price movement
+                    price_change = row.get('close', 0) - df.iloc[max(0, i-1)].get('close', row.get('close', 0))
+                    
+                    # Initialize sentiment_score with default value
+                    sentiment_score = 0.0
+                    
+                    # News sentiment score (-1 to 1)
+                    if abs(price_change) > 0:
+                        sentiment_score = np.tanh(price_change / row.get('close', 1)) * 0.5
+                        df.at[timestamp, "news_sentiment_score"] = sentiment_score
+                    
+                    # News volume (number of news items)
+                    news_volume = max(0, int(np.random.poisson(3)))  # Simulate Poisson distribution
+                    df.at[timestamp, "news_sentiment_volume"] = news_volume
+                    
+                    # News quality score (0 to 1)
+                    quality_score = np.random.beta(2, 2)  # Beta distribution centered around 0.5
+                    df.at[timestamp, "news_quality_score"] = quality_score
+                    
+                    # News timing score (recent news more important)
+                    # Simplified timezone handling
+                    current_time = datetime.now()
+                    time_diff = (current_time - timestamp.replace(tzinfo=None)).total_seconds()
+                    timing_score = max(0, 1 - (time_diff / (24 * 3600)))  # Decay over 24 hours
+                    df.at[timestamp, "news_timing_score"] = timing_score
+                    
+                    # News sentiment trend (moving average of sentiment)
+                    if i >= 5:  # Need at least 5 previous values
+                        recent_sentiments = df.iloc[i-5:i]["news_sentiment_score"].mean()
+                        df.at[timestamp, "news_sentiment_trend"] = recent_sentiments
+                    
+                    # News impact score (combination of quality and timing)
+                    impact_score = quality_score * timing_score
+                    df.at[timestamp, "news_impact_score"] = impact_score
+        
+                except Exception as e:
+                    print(f" [NewsFeatures] Error processing row {i} for {symbol}: {e}")
+                    continue
+        
+            print(f"[NewsFeatures] Successfully added news sentiment features for {symbol}")
+            logging.info(f"   [Features] News sentiment feature added for {symbol}")
+            return df
+            
+        except Exception as e:
+            print(f"[NewsFeatures] Error adding news sentiment features for {symbol}: {e}")
+            logging.error(f"Error adding news sentiment features for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Return df with default values if error occurs
+            df["news_sentiment_score"] = 0.0
+            df["news_sentiment_volume"] = 0
+            df["news_quality_score"] = 0.0
+            df["news_timing_score"] = 0.0
+            df["news_sentiment_trend"] = 0.0
+            df["news_impact_score"] = 0.0
+        return df
+
 
 # === DAILY NEWS SCHEDULER ===
 class DailyNewsScheduler:
@@ -6609,93 +6697,8 @@ class DailyNewsScheduler:
             logging.warning(f"   [Features] Error processing economic events: {e}")
             return df
     
-    def add_news_sentiment_features(self, df, symbol):
-        """
-        IMPORTANT: All news sentiment data is integrated into DataFrame.
-        Phase 2: News Sentiment Features - needs RETRAIN MODEL
-        """
-        print(f" [NewsFeatures] Starting to add news sentiment features for {symbol}...")
-        logging.info(f"   [Features] Starting to add news sentiment features for {symbol}...")
-        
-        try:
-            # Initialize news sentiment features
-            df["news_sentiment_score"] = 0.0
-            df["news_sentiment_volume"] = 0
-            df["news_quality_score"] = 0.0
-            df["news_timing_score"] = 0.0
-            df["news_sentiment_trend"] = 0.0
-            df["news_impact_score"] = 0.0
-            
-            print(f"[NewsFeatures] Initialized news features columns for {symbol}")
-            
-            # Get news data for the time period
-            start_date = df.index.min()
-            end_date = df.index.max()
-            
-            print(f" [NewsFeatures] Processing period: {start_date} to {end_date}")
-            
-            # Simulate news sentiment data (in real implementation, this would fetcontainsctual news)
-            # For now, we'll create synthetic features based on market conditions
-            
-            for i, (timestamp, row) in enumerate(df.iterrows()):
-                try:
-                    # Simulate news sentiment based on price movement
-                    price_change = row.get('close', 0) - df.iloc[max(0, i-1)].get('close', row.get('close', 0))
-                    
-                    # Initialize sentiment_score with default value
-                    sentiment_score = 0.0
-                    
-                    # News sentiment score (-1 to 1)
-                    if abs(price_change) > 0:
-                        sentiment_score = np.tanh(price_change / row.get('close', 1)) * 0.5
-                        df.at[timestamp, "news_sentiment_score"] = sentiment_score
-                    
-                    # News volume (number of news items)
-                    news_volume = max(0, int(np.random.poisson(3)))  # Simulate Poisson distribution
-                    df.at[timestamp, "news_sentiment_volume"] = news_volume
-                    
-                    # News quality score (0 to 1)
-                    quality_score = np.random.beta(2, 2)  # Beta distribution centered around 0.5
-                    df.at[timestamp, "news_quality_score"] = quality_score
-                    
-                    # News timing score (recent news more important)
-                    # Simplified timezone handling
-                    current_time = datetime.now()
-                    time_diff = (current_time - timestamp.replace(tzinfo=None)).total_seconds()
-                    timing_score = max(0, 1 - (time_diff / (24 * 3600)))  # Decay over 24 hours
-                    df.at[timestamp, "news_timing_score"] = timing_score
-                    
-                    # News sentiment trend (moving average of sentiment)
-                    if i >= 5:  # Need at least 5 previous values
-                        recent_sentiments = df.iloc[i-5:i]["news_sentiment_score"].mean()
-                        df.at[timestamp, "news_sentiment_trend"] = recent_sentiments
-                    
-                    # News impact score (combination of quality and timing)
-                    impact_score = quality_score * timing_score
-                    df.at[timestamp, "news_impact_score"] = impact_score
-            
-                except Exception as e:
-                    print(f" [NewsFeatures] Error processing row {i} for {symbol}: {e}")
-                    continue
-            
-            print(f"[NewsFeatures] Successfully added news sentiment features for {symbol}")
-            logging.info(f"   [Features] News sentiment feature added for {symbol}")
-            return df
-            
-        except Exception as e:
-            print(f"[NewsFeatures] Error adding news sentiment features for {symbol}: {e}")
-            logging.error(f"Error adding news sentiment features for {symbol}: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            # Return df with default values if error occurs
-            df["news_sentiment_score"] = 0.0
-            df["news_sentiment_volume"] = 0
-            df["news_quality_score"] = 0.0
-            df["news_timing_score"] = 0.0
-            df["news_sentiment_trend"] = 0.0
-            df["news_impact_score"] = 0.0
-        return df
+
+
 class LLMSentimentAnalyzer:
     def __init__(self, api_key):
         # Use provided API key or fallback to default
