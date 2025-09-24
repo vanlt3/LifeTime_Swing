@@ -14843,6 +14843,15 @@ class EnhancedTradingBot:
                 logging.info(f"[RL Strategy] RL Agent d training trn: {symbols_agent_knows}")
                 logging.info(f"[RL Strategy] Active symbols: {list(self.active_symbols)}")
                 logging.info(f"[RL Strategy] Symbols not fromrong RL Agent: {list(self.active_symbols - set(symbols_agent_knows))}")
+                
+                # FIXED: If RL Agent only knows limited symbols, expand to all active symbols
+                # This ensures Online Learning works for all symbols
+                missing_symbols = list(self.active_symbols - set(symbols_agent_knows))
+                if missing_symbols:
+                    logger.warning(f"⚠️ [RL Strategy] RL Agent missing symbols: {missing_symbols}")
+                    logger.warning(f"⚠️ [RL Strategy] Expanding symbols_agent_knows to include all active symbols for Online Learning")
+                    symbols_agent_knows = list(set(symbols_agent_knows + missing_symbols))
+                    logger.info(f"✅ [RL Strategy] Expanded symbols_agent_knows: {symbols_agent_knows}")
 
 
             if not symbols_agent_knows:
@@ -15047,84 +15056,167 @@ class EnhancedTradingBot:
             logger.debug("[RL Strategy] Starting from RL Agent action")
             
             tasks = []
-            for i, action_code in enumerate(action_vector):
-                if i < len(symbols_agent_knows):
-                    symbol_to_act = symbols_agent_knows[i]
+            # Get original RL symbols count to know which symbols have actual RL actions
+            original_rl_symbols = len(action_vector) if action_vector is not None else 0
+            
+            for i, symbol_to_act in enumerate(symbols_agent_knows):
+                # For symbols beyond original RL model, use HOLD action (0) with medium confidence
+                if i < original_rl_symbols:
+                    action_code = action_vector[i]
                     confidence = live_confidences.get(symbol_to_act, 0.5)
-                    has_position = symbol_to_act in self.open_positions
+                else:
+                    # Symbols added for Online Learning - use HOLD action but still process through Online Learning
+                    action_code = 0  # HOLD
+                    confidence = 0.5  # Medium confidence
+                    logger.info(f"🔄 [Online Learning] Processing {symbol_to_act} (not in original RL model) with Online Learning")
+                
+                has_position = symbol_to_act in self.open_positions
+                
+                logger.debug(f" [RL Strategy] processing {symbol_to_act}: action={action_code}, conf={confidence:.2%}, has_pos={has_position}")
+                
+                # NEW LOGIC: Check validitya action with position current
+                if action_code in [1, 2] and has_position:
+                    current_pos = self.open_positions[symbol_to_act]
+                    current_signal = current_pos['signal']
                     
-                    logger.debug(f" [RL Strategy] processing {symbol_to_act}: action={action_code}, conf={confidence:.2%}, has_pos={has_position}")
+                    # Check xem action fromri ngu c with position current not
+                    is_contradictory = (action_code == 1 and current_signal == 'SELL') or (action_code == 2 and current_signal == 'BUY')
                     
-                    # NEW LOGIC: Check validitya action with position current
-                    if action_code in [1, 2] and has_position:
-                        current_pos = self.open_positions[symbol_to_act]
-                        current_signal = current_pos['signal']
+                    if is_contradictory:
+                        logger.warning(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
+                        print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
                         
-                        # Check xem action fromri ngu c with position current not
-                        is_contradictory = (action_code == 1 and current_signal == 'SELL') or (action_code == 2 and current_signal == 'BUY')
+                        # nhn d liu RL model needs retrain do logic not used
+                        if not hasattr(self, 'rl_integrity_issues'):
+                            self.rl_integrity_issues = 0
+                        self.rl_integrity_issues += 1
                         
-                        if is_contradictory:
-                            logger.warning(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
-                            print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - opposite!")
-                            
-                            # nhn d liu RL model needs retrain do logic not used
-                            if not hasattr(self, 'rl_integrity_issues'):
-                                self.rl_integrity_issues = 0
-                            self.rl_integrity_issues += 1
-                            
-                            if self.rl_integrity_issues >= 3:  # Sau 3 l n vi ph m
-                                logger.error(f"⚠️ [RL Integrity] Detected {self.rl_integrity_issues} times RL agent made contradictory decisions!")
-                                print(f"   [RL Integrity] Detected {self.rl_integrity_issues} times RL agenfrom modelade contradictory decisions!")
-                                print(f"   [RL Integrity] Recommended to retrain RL model to fix logic.")
-                                self.rl_integrity_issues = 0  # Reset counter
-                            
-                            continue
-                        else:
-                            logger.info(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
-                            print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
-                            continue
+                        if self.rl_integrity_issues >= 3:  # Sau 3 l n vi ph m
+                            logger.error(f"⚠️ [RL Integrity] Detected {self.rl_integrity_issues} times RL agent made contradictory decisions!")
+                            print(f"   [RL Integrity] Detected {self.rl_integrity_issues} times RL agenfrom modelade contradictory decisions!")
+                            print(f"   [RL Integrity] Recommended to retrain RL model to fix logic.")
+                            self.rl_integrity_issues = 0  # Reset counter
+                        
+                        continue
+                    else:
+                        logger.info(f" [RL Strategy] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
+                        print(f"   [RL Skip] {symbol_to_act}: RL quyt dnh {['HOLD', 'BUY', 'SELL'][action_code]} nhung d {current_signal} position - bqua")
+                        continue
+                
+                # processing symbols c RL action BUY/SELL v not c position
+                print(f"   [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
+                logger.info(f" [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
+                logger.info(f" [Debug] Active symbols: {list(self.active_symbols)}")
+                
+                # Process all symbols through Online Learning (including HOLD actions)
+                if symbol_to_act in self.active_symbols:
+                    # Always process through Online Learning for all active symbols
+                    symbol_data = live_data_cache.get(symbol_to_act, pd.DataFrame())
                     
-                        # processing symbols c RL action BUY/SELL v not c position
-                    print(f"   [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
-                    logger.info(f" [Debug] {symbol_to_act}: action_code={action_code}, in_active_symbols={symbol_to_act in self.active_symbols}, has_position={has_position}")
-                    logger.info(f" [Debug] Active symbols: {list(self.active_symbols)}")
-                    if action_code in [1, 2] and symbol_to_act in self.active_symbols and not has_position:
-                        print(f"   [Debug] {symbol_to_act}: conditions met, starting Master Agent processing")
-                        # Enhanced action decoding with market regime
-                        market_regime, regime_confidence = self.market_regime_detector.detect_regime(live_data_cache.get(symbol_to_act, pd.DataFrame()))
+                    # Get Online Learning prediction for this symbol
+                    online_decision, online_confidence = self.auto_retrain_manager.online_learning.get_online_prediction_enhanced(
+                        symbol_to_act, symbol_data
+                    )
+                    
+                    logger.info(f"🔄 [Online Learning] {symbol_to_act}: Decision={online_decision}, Confidence={online_confidence:.2%}")
+                    print(f"   [Online Learning] {symbol_to_act}: Decision={online_decision}, Confidence={online_confidence:.2%}")
+                
+                # Only proceed with full analysis for BUY/SELL actions without existing positions
+                if action_code in [1, 2] and symbol_to_act in self.active_symbols and not has_position:
+                    print(f"   [Debug] {symbol_to_act}: conditions met, starting Master Agent processing")
+                    # Enhanced action decoding with market regime
+                    market_regime, regime_confidence = self.market_regime_detector.detect_regime(live_data_cache.get(symbol_to_act, pd.DataFrame()))
+                    
+                    # Calculate volatility for dynamic action space
+                    symbol_data = live_data_cache.get(symbol_to_act, pd.DataFrame())
+                    volatility = symbol_data['close'].pct_change().std() * 100 if len(symbol_data) > 0 else 2.0
+                    
+                    # Get dynamic action space
+                    available_actions = self.dynamic_action_space.get_action_space(symbol_to_act, market_regime, volatility)
+                    
+                    # Decode action with enhanced logic
+                    action_name, confidence_multiplier = self.dynamic_action_space.decode_action(action_code, symbol_to_act, market_regime)
+                    
+                    # Apply adaptive confidence threshold
+                    adaptive_threshold = self.rl_performance_tracker.get_adaptive_threshold(symbol_to_act)
+                    adjusted_confidence = confidence * confidence_multiplier
+                    
+                    # Apply Transfer Learning
+                    source_symbols = [s for s in self.active_symbols if s != symbol_to_act]
+                    if source_symbols:
+                        source_performance = {s: self.rl_performance_tracker.symbol_performance.get(s, {}).get('successful_actions', 0) / max(1, self.rl_performance_tracker.symbol_performance.get(s, {}).get('total_actions', 1)) for s in source_symbols}
+                        transferred_performance, transfer_weights = self.transfer_learning_manager.transfer_knowledge(symbol_to_act, source_symbols, source_performance)
                         
-                        # Calculate volatility for dynamic action space
-                        symbol_data = live_data_cache.get(symbol_to_act, pd.DataFrame())
-                        volatility = symbol_data['close'].pct_change().std() * 100 if len(symbol_data) > 0 else 2.0
-                        
-                        # Get dynamic action space
-                        available_actions = self.dynamic_action_space.get_action_space(symbol_to_act, market_regime, volatility)
-                        
-                        # Decode action with enhanced logic
-                        action_name, confidence_multiplier = self.dynamic_action_space.decode_action(action_code, symbol_to_act, market_regime)
-                        
-                        # Apply adaptive confidence threshold
-                        adaptive_threshold = self.rl_performance_tracker.get_adaptive_threshold(symbol_to_act)
-                        adjusted_confidence = confidence * confidence_multiplier
-                        
-                        # Apply Transfer Learning
-                        source_symbols = [s for s in self.active_symbols if s != symbol_to_act]
-                        if source_symbols:
-                            source_performance = {s: self.rl_performance_tracker.symbol_performance.get(s, {}).get('successful_actions', 0) / max(1, self.rl_performance_tracker.symbol_performance.get(s, {}).get('total_actions', 1)) for s in source_symbols}
-                            transferred_performance, transfer_weights = self.transfer_learning_manager.transfer_knowledge(symbol_to_act, source_symbols, source_performance)
-                            
-                            # Adjust confidence based on transferred knowledge
-                            transfer_multiplier = 1.0 + (transferred_performance - 0.5) * 0.2  # 10% adjustment
-                            adjusted_confidence *= transfer_multiplier
-                        
-                        # Apply Master Agent Coordination
+                        # Adjust confidence based on transferred knowledge
+                        transfer_multiplier = 1.0 + (transferred_performance - 0.5) * 0.2  # 10% adjustment
+                        adjusted_confidence *= transfer_multiplier
+                    
+                    # Apply Master Agent Coordination
+                    logger.info(f" [Master Agent] Starting analysis for {symbol_to_act}")
+                    print(f"   [Master Agent] Starting analysis for {symbol_to_act}")
+                    print(f"   [Debug] Master Agent Coordinator: {self.master_agent_coordinator}")
+                    
+                    try:
+                        master_decision, master_confidence = self.master_agent_coordinator.coordinate_decision(
+                            'trading_decision', symbol_data, symbol_to_act
+                        )
+                        logger.info(f" [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
+                        print(f"   [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
+                    except Exception as e:
+                        logger.error(f"[Master Agent] Error analyzing {symbol_to_act}: {e}")
+                        print(f"   [Master Agent] Error analyzing {symbol_to_act}: {e}")
+                        master_decision, master_confidence = "HOLD", 0.5
+                    
+                    # Apply Advanced Ensemble Prediction
+                    ensemble_decision, ensemble_confidence = self.ensemble_manager.predict_ensemble(
+                        symbol_data, symbol_to_act
+                    )
+                    
+                    # Combine RL, Master Agent, Ensemble, v Online Learning decisions
+                    final_decision, final_confidence = self._combine_all_decisions_with_online_learning(
+                        action_name, adjusted_confidence,
+                        master_decision, master_confidence,
+                        ensemble_decision, ensemble_confidence,
+                        online_decision, online_confidence,
+                        symbol_to_act
+                    )
+                    
+                    logger.info(f" [RL Strategy] Enhanced decision for {symbol_to_act}:")
+                    logger.info(f"   - RL Action: {action_name} (confidence: {adjusted_confidence:.2%})")
+                    logger.info(f"   - Master Agent: {master_decision} (confidence: {master_confidence:.2%})")
+                    logger.info(f"   - Ensemble: {ensemble_decision} (confidence: {ensemble_confidence:.2%})")
+                    logger.info(f"   - Online Learning: {online_decision} (confidence: {online_confidence:.2%})")
+                    logger.info(f"   - Final Decision: {final_decision} (confidence: {final_confidence:.2%})")
+                    logger.info(f"   - Market Regime: {market_regime} (confidence: {regime_confidence:.2%})")
+                    logger.info(f"   - Volatility: {volatility:.2f}%")
+                    logger.info(f"   - Available Actions: {available_actions}")
+                    logger.info(f"   - Adaptive Threshold: {adaptive_threshold:.2%}")
+                    if source_symbols:
+                        logger.info(f"   - Transfer Learning: {transferred_performance:.2%} from {len(source_symbols)} symbols")
+                    
+                    # Check confidence threshold
+                    if final_confidence >= adaptive_threshold and symbol_to_act not in self.open_positions:
+                        logger.info(f"[RL Strategy] Creating task: {final_decision} {symbol_to_act} with confidence {final_confidence:.2%}")
+                        tasks.append(self.handle_position_logic(symbol_to_act, final_decision, final_confidence))
+                    elif final_confidence >= adaptive_threshold and symbol_to_act in self.open_positions:
+                        logger.info(f"[RL Strategy] Skipping {symbol_to_act}: Already has open position")
+                    else:
+                        logger.info(f" [RL Strategy] {symbol_to_act}: Final Confidence {final_confidence:.2%} < Threshold {adaptive_threshold:.2%}")
+                    
+                    # Trigger online learning feedback loop
+                    self._trigger_online_learning_feedback_enhanced(symbol_to_act, final_decision, final_confidence, market_data=symbol_data)
+                
+                # processing symbols c confidence cao nhung RL action = HOLD (fallback analysis)
+                elif action_code == 0 and symbol_to_act in self.active_symbols and symbol_to_act not in self.open_positions:
+                    if confidence > 0.52:  # Confidence threshold cho fallback analysis
+                        print(f"   [Debug] {symbol_to_act}: RL=HOLD nhung confidence cao, starting Master Agent processing")
                         logger.info(f" [Master Agent] Starting analysis for {symbol_to_act}")
                         print(f"   [Master Agent] Starting analysis for {symbol_to_act}")
                         print(f"   [Debug] Master Agent Coordinator: {self.master_agent_coordinator}")
                         
                         try:
                             master_decision, master_confidence = self.master_agent_coordinator.coordinate_decision(
-                                'trading_decision', symbol_data, symbol_to_act
+                                'trading_decision', live_data_cache.get(symbol_to_act, pd.DataFrame()), symbol_to_act
                             )
                             logger.info(f" [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
                             print(f"   [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
@@ -15132,64 +15224,6 @@ class EnhancedTradingBot:
                             logger.error(f"[Master Agent] Error analyzing {symbol_to_act}: {e}")
                             print(f"   [Master Agent] Error analyzing {symbol_to_act}: {e}")
                             master_decision, master_confidence = "HOLD", 0.5
-                        
-                        # Apply Advanced Ensemble Prediction
-                        ensemble_decision, ensemble_confidence = self.ensemble_manager.predict_ensemble(
-                            symbol_data, symbol_to_act
-                        )
-                        
-                        # ONLINE LEARNING INTEGRATION: L y prediction tonline learning model
-                        online_decision, online_confidence = self.auto_retrain_manager.online_learning.get_online_prediction_enhanced(
-                            symbol_to_act, symbol_data
-                        )
-                        
-                        # Combine RL, Master Agent, Ensemble, v Online Learning decisions
-                        final_decision, final_confidence = self._combine_all_decisions_with_online_learning(
-                            action_name, adjusted_confidence,
-                            master_decision, master_confidence,
-                            ensemble_decision, ensemble_confidence,
-                            online_decision, online_confidence,
-                            symbol_to_act
-                        )
-                        
-                        logger.info(f" [RL Strategy] Enhanced decision for {symbol_to_act}:")
-                        logger.info(f"   - RL Action: {action_name} (confidence: {adjusted_confidence:.2%})")
-                        logger.info(f"   - Master Agent: {master_decision} (confidence: {master_confidence:.2%})")
-                        logger.info(f"   - Ensemble: {ensemble_decision} (confidence: {ensemble_confidence:.2%})")
-                        logger.info(f"   - Final Decision: {final_decision} (confidence: {final_confidence:.2%})")
-                        logger.info(f"   - Market Regime: {market_regime} (confidence: {regime_confidence:.2%})")
-                        logger.info(f"   - Volatility: {volatility:.2f}%")
-                        logger.info(f"   - Available Actions: {available_actions}")
-                        logger.info(f"   - Adaptive Threshold: {adaptive_threshold:.2%}")
-                        if source_symbols:
-                            logger.info(f"   - Transfer Learning: {transferred_performance:.2%} from {len(source_symbols)} symbols")
-                        
-                        if final_confidence >= adaptive_threshold and symbol_to_act not in self.open_positions:
-                            logger.info(f"[RL Strategy] Creating task: {final_decision} {symbol_to_act} with confidence {final_confidence:.2%}")
-                            tasks.append(self.handle_position_logic(symbol_to_act, final_decision, final_confidence))
-                        elif final_confidence >= adaptive_threshold and symbol_to_act in self.open_positions:
-                            logger.info(f"[RL Strategy] Skipping {symbol_to_act}: Already has open position")
-                        else:
-                            logger.info(f" [RL Strategy] {symbol_to_act}: Final Confidence {final_confidence:.2%} < Threshold {adaptive_threshold:.2%}")
-                         
-                        # processing symbols c confidence cao nhung RL action = HOLD (fallback analysis)
-                        if action_code == 0 and symbol_to_act in self.active_symbols and symbol_to_act not in self.open_positions:
-                            if confidence > 0.52:  # Confidence threshold cho fallback analysis
-                                print(f"   [Debug] {symbol_to_act}: RL=HOLD nhung confidence cao, starting Master Agent processing")
-                                logger.info(f" [Master Agent] Starting analysis for {symbol_to_act}")
-                                print(f"   [Master Agent] Starting analysis for {symbol_to_act}")
-                                print(f"   [Debug] Master Agent Coordinator: {self.master_agent_coordinator}")
-                                
-                                try:
-                                    master_decision, master_confidence = self.master_agent_coordinator.coordinate_decision(
-                                        'trading_decision', live_data_cache.get(symbol_to_act, pd.DataFrame()), symbol_to_act
-                                    )
-                                    logger.info(f" [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
-                                    print(f"   [Master Agent] Result for {symbol_to_act}: {master_decision} (confidence: {master_confidence:.2%})")
-                                except Exception as e:
-                                    logger.error(f"[Master Agent] Error analyzing {symbol_to_act}: {e}")
-                                    print(f"   [Master Agent] Error analyzing {symbol_to_act}: {e}")
-                                    master_decision, master_confidence = "HOLD", 0.5
                 
                 # Ly tn hiu t Ensemble model lm fallback
                 try:
