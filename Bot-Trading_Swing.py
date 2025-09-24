@@ -13767,7 +13767,7 @@ class EnhancedTradingBot:
         
         # Advanced Master Agent System for TP/SL Decisions
         print("🎯 [Bot Init] Initializing Master Agent for TP/SL decisions...")
-        self.master_agent = MasterAgent()
+        self.master_agent_coordinator = MasterAgent()
         print("✅ [Bot Init] Master Agent initialized successfully")
         
         # Advanced Ensemble System
@@ -18638,7 +18638,7 @@ class EnhancedTradingBot:
             print(f"🎯 [Trading Bot] Consulting Master Agent for {symbol} TP/SL decision...")
             
             # Use Master Agent to decide TP/SL levels
-            tp_sl_decision = self.master_agent.decide_tp_sl_levels(
+            tp_sl_decision = self.master_agent_coordinator.decide_tp_sl_levels(
                 symbol, entry_price, direction, market_data
             )
             
@@ -18655,7 +18655,7 @@ class EnhancedTradingBot:
             print(f"🎯 [Trading Bot] Consulting Master Agent for {symbol} trailing stop...")
             
             # Use Master Agent to decide trailing stop activation
-            trailing_decision = self.master_agent.decide_trailing_stop_activation(
+            trailing_decision = self.master_agent_coordinator.decide_trailing_stop_activation(
                 symbol, current_price, entry_price, direction, market_data
             )
             
