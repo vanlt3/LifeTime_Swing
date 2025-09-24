@@ -14275,8 +14275,10 @@ class EnhancedTradingBot:
             # Create database file path
             db_path = "trading_bot.db"
             
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            # Ensure directory exists (only if db_path contains a directory)
+            db_dir = os.path.dirname(db_path)
+            if db_dir:  # Only create directory if path contains one
+                os.makedirs(db_dir, exist_ok=True)
             
             # Connect to database
             self.conn = sqlite3.connect(db_path)
