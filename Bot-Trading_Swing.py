@@ -12438,6 +12438,62 @@ class MasterAgent:
         
         print("✅ [Master Agent] Master Agent initialized successfully")
     
+    def initialize_specialist_agents(self):
+        """Initialize all specialist agents"""
+        print("🎯 [Master Agent] Starting specialist agents initialization...")
+        
+        try:
+            self.specialist_agents = {
+                'trend_analyzer': TrendAnalysisAgent(),
+                'news_analyzer': NewsAnalysisAgent(), 
+                'risk_manager': RiskManagementAgent(),
+                'sentiment_analyzer': SentimentAnalysisAgent(),
+                'volatility_predictor': VolatilityPredictionAgent(),
+                'portfolio_optimizer': PortfolioOptimizationAgent()
+            }
+            print(f"✅ [Master Agent] Initialized {len(self.specialist_agents)} specialist agents")
+            
+            # setup communication matrix
+            self._setup_communication_matrix()
+            print("✅ [Master Agent] Communication matrix setup completed")
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error initializing specialist agents: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback: to empty specialist agents
+            self.specialist_agents = {}
+    
+    def _setup_communication_matrix(self):
+        """Setup communication matrix between agents"""
+        agents = list(self.specialist_agents.keys())
+        self.communication_matrix = {}
+        
+        for agent1 in agents:
+            self.communication_matrix[agent1] = {}
+            for agent2 in agents:
+                if agent1 != agent2:
+                    # Check if agents should communicate
+                    if self._should_communicate(agent1, agent2):
+                        self.communication_matrix[agent1][agent2] = True
+                    else:
+                        self.communication_matrix[agent1][agent2] = False
+                else:
+                    self.communication_matrix[agent1][agent2] = False
+    
+    def _should_communicate(self, agent1, agent2):
+        """Check if two agents should communicate"""
+        communication_pairs = [
+            ('trend_analyzer', 'volatility_predictor'),
+            ('news_analyzer', 'sentiment_analyzer'),
+            ('risk_manager', 'portfolio_optimizer'),
+            ('trend_analyzer', 'risk_manager'),
+            ('news_analyzer', 'trend_analyzer'),
+            ('sentiment_analyzer', 'portfolio_optimizer')
+        ]
+        
+        return (agent1, agent2) in communication_pairs or (agent2, agent1) in communication_pairs
+
     def decide_tp_sl_levels(self, symbol, entry_price, direction, market_data):
         """
         Master decision function for TP/SL levels
