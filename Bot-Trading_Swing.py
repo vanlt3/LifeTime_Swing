@@ -12033,6 +12033,126 @@ class TransferLearningManager:
             traceback.print_exc()
             # Fallback: to empty specialist agents
             self.specialist_agents = {}
+    
+    def coordinate_decision(self, task_type, market_data, symbol):
+        """decision coordination for all specialist agents"""
+        print(f"[Master Agent Coordinator] Starting coordinate_decision for {symbol}")
+        logging.info(f"[Master Agent Coordinator] Starting coordinate_decision for {symbol}")
+        
+        try:
+            # Decompose task
+            subtasks = self.decompose_task(task_type, market_data)
+            print(f" [Master Agent Coordinator] Decomposed tasks: {list(subtasks.keys())}")
+            
+            # Collect opinions from specialist agents
+            agent_opinions = {}
+            agent_confidences = {}
+            
+            for subtask_name, data in subtasks.items():
+                # Map subtask names to agent names
+                agent_mapping = {
+                    'trend_analysis': 'trend_analyzer',
+                    'news_analysis': 'news_analyzer', 
+                    'risk_assessment': 'risk_manager',
+                    'sentiment_analysis': 'sentiment_analyzer',
+                    'volatility_prediction': 'volatility_predictor',
+                    'portfolio_optimization': 'portfolio_optimizer'
+                }
+                
+                agent_name = agent_mapping.get(subtask_name, subtask_name)
+                if agent_name in self.specialist_agents:
+                    print(f" [Master Agent Coordinator] Starting analysis with {agent_name}")
+                    agent = self.specialist_agents[agent_name]
+                    try:
+                        opinion, confidence = agent.analyze(data, symbol)
+                        agent_opinions[subtask_name] = opinion
+                        agent_confidences[subtask_name] = confidence
+                        print(f" [Master Agent Coordinator] {subtask_name}: {opinion} ({confidence:.2%})")
+                    except Exception as e:
+                        print(f"[Master Agent Coordinator] Li in {subtask_name}: {e}")
+                        agent_opinions[subtask_name] = "HOLD"
+                        agent_confidences[subtask_name] = 0.5
+            
+            # Apply consensus mechanism
+            final_decision, final_confidence = self._apply_consensus_mechanism(
+                agent_opinions, agent_confidences, symbol
+            )
+            
+            print(f" [Master Agent Coordinator] Final decision cho {symbol}: {final_decision} ({final_confidence:.2%})")
+            
+            # Update agent performance
+            self._update_agent_performance(agent_opinions, agent_confidences, symbol)
+            
+            return final_decision, final_confidence
+            
+        except Exception as e:
+            print(f"[Master Agent Coordinator] Li in coordinate_decision: {e}")
+            logging.error(f"Error in Master Agent coordination: {e}")
+            return "HOLD", 0.5
+    
+    def decompose_task(self, task_type, market_data):
+        """Chia nh task thnh subtasks cho specialist agents"""
+        if task_type == 'trading_decision':
+            return {
+                'trend_analysis': market_data,
+                'news_analysis': market_data,
+                'risk_assessment': market_data,
+                'sentiment_analysis': market_data,
+                'volatility_prediction': market_data,
+                'portfolio_optimization': market_data
+            }
+        elif task_type == 'position_management':
+            return {
+                'risk_assessment': market_data,
+                'trend_analysis': market_data,
+                'portfolio_optimization': market_data
+            }
+        else:
+            return {'general_analysis': market_data}
+    
+    def _apply_consensus_mechanism(self, opinions, confidences, symbol):
+        """Apply consensus mechanism to agent opinions"""
+        try:
+            if not opinions:
+                return "HOLD", 0.5
+            
+            # Weight opinions by confidence
+            weighted_votes = {}
+            total_weight = 0
+            
+            for agent, opinion in opinions.items():
+                confidence = confidences.get(agent, 0.5)
+                if opinion not in weighted_votes:
+                    weighted_votes[opinion] = 0
+                weighted_votes[opinion] += confidence
+                total_weight += confidence
+            
+            # Find decision with highest weighted score
+            if weighted_votes:
+                best_decision = max(weighted_votes, key=weighted_votes.get)
+                final_confidence = weighted_votes[best_decision] / total_weight if total_weight > 0 else 0.5
+                return best_decision, min(final_confidence, 0.95)
+            else:
+                return "HOLD", 0.5
+                
+        except Exception as e:
+            print(f"[Master Agent Coordinator] Error in consensus mechanism: {e}")
+            return "HOLD", 0.5
+    
+    def _update_agent_performance(self, opinions, confidences, symbol):
+        """Update performance of agents"""
+        try:
+            if not hasattr(self, 'agent_performance'):
+                self.agent_performance = {}
+                
+            for agent_name in opinions.keys():
+                if agent_name not in self.agent_performance:
+                    self.agent_performance[agent_name] = {}
+                if symbol not in self.agent_performance[agent_name]:
+                    self.agent_performance[agent_name][symbol] = 0.5
+                    
+        except Exception as e:
+            print(f"[Master Agent Coordinator] Error updating agent performance: {e}")
         
     def _setup_communication_matrix(self):
         """setup p ma tr n giao ti p gi a cofgents"""
@@ -12063,268 +12183,45 @@ class TransferLearningManager:
         ]
         
         return (agent1, agent2) in communication_pairs or (agent2, agent1) in communication_pairs
-    
-    def decompose_task(self, task_type, market_data):
-        """Chia nhtask thnh subtasks cho specialist agents"""
-        if task_type == 'trading_decision':
-            return {
-                'trend_analysis': market_data,
-                'news_analysis': market_data,
-                'risk_assessment': market_data,
-                'sentiment_analysis': market_data,
-                'volatility_prediction': market_data,
-                'portfolio_optimization': market_data
-            }
-        elif task_type == 'position_management':
-            return {
-                'risk_assessment': market_data,
-                'trend_analysis': market_data,
-                'portfolio_optimization': market_data
-            }
-        else:
-            return {'general_analysis': market_data}
-    
-    def coordinate_decision(self, task_type, market_data, symbol):
-        """decision coordination for all specialist agents"""
-        print(f"[Master Agent Coordinator] Starting coordinate_decision for {symbol}")
-        logging.info(f"[Master Agent Coordinator] Starting coordinate_decision for {symbol}")
-        
-        try:
-            # Decompose task
-            subtasks = self.decompose_task(task_type, market_data)
-            print(f" [Master Agent Coordinator] Decomposed tasks: {list(subtasks.keys())}")
-            
-            # Collectopinions from specialist agents
-            agent_opinions = {}
-            agent_confidences = {}
-            
-            for subtask_name, data in subtasks.items():
-                if subtask_name in self.specialist_agents:
-                    print(f" [Master Agent Coordinator] ang analysis with {subtask_name}")
-                    agent = self.specialist_agents[subtask_name]
-                    try:
-                        opinion, confidence = agent.analyze(data, symbol)
-                        agent_opinions[subtask_name] = opinion
-                        agent_confidences[subtask_name] = confidence
-                        print(f" [Master Agent Coordinator] {subtask_name}: {opinion} ({confidence:.2%})")
-                    except Exception as e:
-                        print(f"[Master Agent Coordinator] Li in {subtask_name}: {e}")
-                        agent_opinions[subtask_name] = "HOLD"
-                        agent_confidences[subtask_name] = 0.5
-            
-            # Apply consensus mechanism
-            final_decision, final_confidence = self._apply_consensus_mechanism(
-                agent_opinions, agent_confidences, symbol
-            )
-            
-            print(f" [Master Agent Coordinator] Final decision cho {symbol}: {final_decision} ({final_confidence:.2%})")
-            
-            # Update agent performance
-            self._update_agent_performance(agent_opinions, agent_confidences, symbol)
-            
-            return final_decision, final_confidence
-            
-        except Exception as e:
-            print(f"[Master Agent Coordinator] Li in coordinate_decision: {e}")
-            logging.error(f"Error in Master Agent coordination: {e}")
-            return "HOLD", 0.5
-    
-    def _apply_consensus_mechanism(self, opinions, confidences, symbol):
-        """p used co chconsensus with Confidence Adjustment thay v tch i public nh c"""
-        try:
-            # Weighted voting based on confidence and historical performance
-            weighted_votes = {}
-            
-            for agent_name, opinion in opinions.items():
-                confidence = confidences[agent_name]
-                historical_performance = self.agent_performance.get(agent_name, {}).get(symbol, 0.5)
-                
-                # Calculate weight
-                weight = confidence * historical_performance
-                
-                if opinion not in weighted_votes:
-                    weighted_votes[opinion] = 0
-                weighted_votes[opinion] += weight
-            
-            # Select decision with highest weighted vote
-            if weighted_votes:
-                final_decision = max(weighted_votes, key=weighted_votes.get)
-                total_weight = sum(weighted_votes.values())
-                raw_confidence = weighted_votes[final_decision] / total_weight
-                
-                # CONFIDENCE ADJUSTMENT: Thay v tch i, adjustment dtin c y
-                adjusted_confidence = self._apply_confidence_adjustment(
-                    final_decision, raw_confidence, symbol, opinions, confidences
-                )
-                
-                return final_decision, adjusted_confidence
-            else:
-                return "HOLD", 0.5
-            
-        except Exception as e:
-            logging.error(f"Error in consensus mechanism: {e}")
-            return "HOLD", 0.5
-    
-    def _apply_confidence_adjustment(self, decision, raw_confidence, symbol, opinions, confidences):
-        """i u ch nh dtin c y d a trn all y u tused thay v tch i public nh c"""
-        try:
-            adjusted_confidence = raw_confidence
-            
-            # 1. i u ch nh d a trn Using thu n of cofgents
-            consensus_factor = self._calculate_consensus_factor(opinions, confidences)
-            adjusted_confidence *= consensus_factor
-            
-            # 2. i u ch nh d a trn market volatility
-            volatility_factor = self._calculate_volatility_factor(symbol)
-            adjusted_confidence *= volatility_factor
-            
-            # 3. i u ch nh d a trn historical performance of decision type
-            performance_factor = self._calculate_performance_factor(decision, symbol)
-            adjusted_confidence *= performance_factor
-            
-            # 4. i u ch nh d a trn risk tolerance
-            risk_factor = self._calculate_risk_factor(decision, symbol)
-            adjusted_confidence *= risk_factor
-            
-            # 5. i u ch nh d a trn market conditions
-            market_factor = self._calculate_market_condition_factor(symbol)
-            adjusted_confidence *= market_factor
-            
-            # Clamp confidence between 0.1 and 0.95 (not bao gitch i hon ton)
-            adjusted_confidence = max(0.1, min(0.95, adjusted_confidence))
-            
-            # Log confidence adjustment
-            logging.info(f" [Confidence Adjustment] {symbol} {decision}:")
-            logging.info(f"   - Raw: {raw_confidence:.3f}")
-            logging.info(f"   - Consensus: {consensus_factor:.3f}")
-            logging.info(f"   - Volatility: {volatility_factor:.3f}")
-            logging.info(f"   - Performance: {performance_factor:.3f}")
-            logging.info(f"   - Risk: {risk_factor:.3f}")
-            logging.info(f"   - Market: {market_factor:.3f}")
-            logging.info(f"   - Final: {adjusted_confidence:.3f}")
-            
-            return adjusted_confidence
-            
-        except Exception as e:
-            logging.error(f"Error in confidence adjustment: {e}")
-            return max(0.1, raw_confidence)
-    
-    def _calculate_consensus_factor(self, opinions, confidences):
-        """Calculate consensus factor between agents"""
-        try:
-            if not opinions:
-                return 0.5
-            
-            # Calculate decision dispersion
-            decision_counts = {}
-            total_confidence = 0
-            
-            for opinion, confidence in zip(opinions.values(), confidences.values()):
-                decision_counts[opinion] = decision_counts.get(opinion, 0) + confidence
-                total_confidence += confidence
-            
-            if total_confidence == 0:
-                return 0.5
-            
-            # Calculate consensus factor (higher when there's consensus)
-            max_decision_weight = max(decision_counts.values())
-            consensus_ratio = max_decision_weight / total_confidence
-            
-            # Chuy n d i thnh hsadjustment (0.7 - 1.3)
-            return 0.7 + (consensus_ratio * 0.6)
-            
-        except Exception as e:
-            logging.error(f"Error calculating consensus factor: {e}")
-            return 1.0
-    
-    def _calculate_volatility_factor(self, symbol):
-        """Calculate adjustment factor based on volatility"""
-        try:
-            # Help volatility calculation (in the market data)
-            # Volatility cao -> gi levelonfidence, volatility th p -> tang confidence
-            volatility_score = np.random.uniform(0.3, 0.8)  # Placeholder
-            
-            # Chuy n d i volatility thnh hsadjustment
-            # Volatility cao (0.8) -> factor th p (0.8), Volatility th p (0.3) -> factor cao (1.2)
-            volatility_factor = 1.2 - (volatility_score - 0.3) * 0.8
-            
-            return max(0.6, min(1.3, volatility_factor))
-            
-        except Exception as e:
-            logging.error(f"Error calculating volatility factor: {e}")
-            return 1.0
-    
-    def _calculate_performance_factor(self, decision, symbol):
-        """Calculate adjustment factor based on historical performance"""
-        try:
-            # L y performance history cho decision type this
-            decision_performance = self.agent_performance.get('decision_performance', {}).get(symbol, {}).get(decision, 0.5)
-            
-            # Chuy n d i performance thnh hsadjustment
-            # Performance cao (0.8+) -> factor cao (1.2), Performance th p (0.3-) -> factor th p (0.8)
-            if decision_performance >= 0.8:
-                return 1.2
-            elif decision_performance >= 0.6:
-                return 1.1
-            elif decision_performance >= 0.4:
-                return 1.0
-            else:
-                return 0.8
-                
-        except Exception as e:
-            logging.error(f"Error calculating performance factor: {e}")
-            return 1.0
-    
-    def _calculate_risk_factor(self, decision, symbol):
-        """Calculate adjustment factor based on risk tolerance"""
-        try:
-            # Risk tolerance d a trn decision type
-            risk_levels = {
-                'BUY': 0.8,    # BUY c risk cao hon
-                'SELL': 0.7,   # SELL c risk trung bnh
-                'HOLD': 1.0    # HOLd risk th p nh t
-            }
-            
-            base_risk = risk_levels.get(decision, 0.8)
-            
-            # i u ch nh d a trn symbol volatility
-            symbol_risk_multiplier = np.random.uniform(0.9, 1.1)  # Placeholder
-            
-            return base_risk * symbol_risk_multiplier
-            
-        except Exception as e:
-            logging.error(f"Error calculating risk factor: {e}")
-            return 1.0
-    
-    def _calculate_market_condition_factor(self, symbol):
-        """Calculate adjustment factor based on market conditions"""
-        try:
-            # Gil p market condition analysis
-            market_conditions = {
-                'trending': 1.1,      # Market trending -> tang confidence
-                'ranging': 0.9,       # Market ranging -> gi levelonfidence
-                'volatile': 0.8,      # Market volatile -> gi levelonfidence
-                'stable': 1.0         # Market stable -> original
-            }
-            
-            # Gil p market condition detection
-            current_condition = np.random.choice(list(market_conditions.keys()))
-            
-            return market_conditions[current_condition]
-            
-        except Exception as e:
-            logging.error(f"Error calculating market condition factor: {e}")
-            return 1.0
-    
-    def _update_agent_performance(self, opinions, confidences, symbol):
-        """Update performance of agents"""
-        for agent_name in opinions.keys():
-            if agent_name not in self.agent_performance:
-                self.agent_performance[agent_name] = {}
-            if symbol not in self.agent_performance[agent_name]:
-                self.agent_performance[agent_name][symbol] = 0.5
 
 class TrendAnalysisAgent:
+    """Specialist agent cho trend analysis"""
+    
+    def analyze(self, data, symbol):
+        """analysis trenda symbol"""
+        try:
+            if len(data) < 20:
+                return "HOLD", 0.5
+            
+            # Calculate trend indicators
+            sma_20 = data['close'].rolling(20).mean()
+            sma_50 = data['close'].rolling(50).mean() if len(data) >= 50 else sma_20
+            
+            current_price = data['close'].iloc[-1]
+            sma_20_current = sma_20.iloc[-1]
+            sma_50_current = sma_50.iloc[-1]
+            
+            # Trend strength
+            trend_strength = abs(current_price - sma_20_current) / sma_20_current
+            
+            # Determine trend direction
+            if current_price > sma_20_current > sma_50_current:
+                decision = "BUY"
+                confidence = min(0.9, trend_strength * 10)
+            elif current_price < sma_20_current < sma_50_current:
+                decision = "SELL"
+                confidence = min(0.9, trend_strength * 10)
+            else:
+                decision = "HOLD"
+                confidence = 0.5
+            
+            return decision, confidence
+            
+        except Exception as e:
+            logging.error(f"TrendAnalysisAgent error: {e}")
+            return "HOLD", 0.5
+
+class NewsAnalysisAgent:
     """Specialist agent cho trend analysis"""
     
     def analyze(self, data, symbol):
@@ -12515,13 +12412,8 @@ class MasterAgent:
         self.trailing_stop_decisions = {}
         self.performance_metrics = {}
         
-        # Specialist agents for analysis
-        self.specialist_agents = {
-            'trend_analyzer': TrendAnalysisAgent(),
-            'volatility_predictor': VolatilityPredictionAgent(),
-            'risk_manager': RiskManagementAgent(),
-            'sentiment_analyzer': SentimentAnalysisAgent()
-        }
+        # Initialize specialist agents for analysis
+        self.initialize_specialist_agents()
         
         # Decision parameters
         self.min_risk_reward_ratio = 1.5
