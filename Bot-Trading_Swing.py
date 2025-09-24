@@ -17076,6 +17076,9 @@ class EnhancedTradingBot:
             except Exception as e:
                 print(f"❌ Lỗi ghi DB cho {symbol}: {e}")
 
+        # Save closed position data to file
+        self.save_closed_position(symbol, position, reason, exit_price, pips, closed_at)
+        
         self.update_performance_metrics()
         if send_alert:
             self.send_close_alert_enhanced(symbol, position, reason, exit_price, pips)
@@ -17095,6 +17098,88 @@ class EnhancedTradingBot:
                 # fromhg i needsh bo Discord Or di u ch nh strategy
         except Exception as e:
             print(f" [Performance Check] Li Check performance cho {symbol}: {e}")
+
+    def save_closed_position(self, symbol, position, reason, exit_price, pips, closed_at):
+        """Save closed position data to closed_positions.json file"""
+        try:
+            closed_position_data = {
+                "symbol": symbol,
+                "signal": position.get("signal", ""),
+                "entry_price": position.get("entry_price", 0),
+                "exit_price": exit_price,
+                "pips": pips,
+                "reason": reason,
+                "opened_at": position.get("opened_at").strftime("%Y-%m-%d %H:%M:%S") if position.get("opened_at") else "",
+                "closed_at": closed_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "initial_confidence": position.get("initial_confidence", 0.0),
+                "is_winning": pips > 0
+            }
+            
+            # Read existing closed positions
+            try:
+                with open("/workspace/closed_positions.json", "r") as f:
+                    closed_positions = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                closed_positions = []
+            
+            # Add new closed position
+            closed_positions.append(closed_position_data)
+            
+            # Save updated closed positions
+            with open("/workspace/closed_positions.json", "w") as f:
+                json.dump(closed_positions, f, indent=2)
+            
+            print(f"✅ Saved closed position data for {symbol} to closed_positions.json")
+            
+        except Exception as e:
+            print(f"❌ Error saving closed position data: {e}")
+    
+    def calculate_winrate_from_closed_positions(self, symbol=None, days=None):
+        """Calculate winrate from closed positions data"""
+        try:
+            # Read closed positions
+            try:
+                with open("/workspace/closed_positions.json", "r") as f:
+                    closed_positions = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                return {"total_trades": 0, "winning_trades": 0, "winrate": 0.0}
+            
+            # Filter by symbol if specified
+            if symbol:
+                closed_positions = [pos for pos in closed_positions if pos["symbol"] == symbol]
+            
+            # Filter by days if specified
+            if days:
+                cutoff_date = datetime.now() - timedelta(days=days)
+                filtered_positions = []
+                for pos in closed_positions:
+                    try:
+                        pos_date = datetime.strptime(pos["closed_at"], "%Y-%m-%d %H:%M:%S")
+                        if pos_date >= cutoff_date:
+                            filtered_positions.append(pos)
+                    except ValueError:
+                        continue
+                closed_positions = filtered_positions
+            
+            # Calculate winrate
+            total_trades = len(closed_positions)
+            winning_trades = sum(1 for pos in closed_positions if pos.get("is_winning", False))
+            winrate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
+            
+            return {
+                "total_trades": total_trades,
+                "winning_trades": winning_trades,
+                "winrate": winrate
+            }
+            
+        except Exception as e:
+            print(f"❌ Error calculating winrate: {e}")
+            return {"total_trades": 0, "winning_trades": 0, "winrate": 0.0}
+    
+    def get_overall_winrate(self):
+        """Get overall winrate from closed positions"""
+        winrate_data = self.calculate_winrate_from_closed_positions()
+        return winrate_data["winrate"]
 
     def calculate_pip_value(self, symbol):
         symbol = symbol.upper()
@@ -17193,7 +17278,7 @@ class EnhancedTradingBot:
             f" **Stop Loss:** `{sl:.5f}`\n"
             f" **Order Risk:** `{position_size_percent*100:.2f}%` of account\n"
             f"                                        \n"
-            f" **Performance:** Win Rate: {self.performance_metrics.get('win_rate', 0):.2f}% | Total P&L: {self.performance_metrics.get('total_pips', 0):.1f} pips"
+            f" **Performance:** Win Rate: {self.get_overall_winrate():.2f}%"
         )
         
         self.send_discord_alert(message)
@@ -17204,6 +17289,10 @@ class EnhancedTradingBot:
         hours, remainder = divmod(duration.total_seconds(), 3600)
         minutes, _ = divmod(remainder, 60)
         duration_str = f"{int(hours)}h {int(minutes)}m"
+        
+        # Get winrate from closed positions file
+        winrate = self.get_overall_winrate()
+        
         message = (
             f"{profit_emoji} **POSITION CLOSED: {position.get('signal','')} {symbol}** {profit_emoji}\n"
             f"- Close reason: {reason}\n"
@@ -17213,7 +17302,7 @@ class EnhancedTradingBot:
             f"- Duration: {duration_str}\n"
             f"- ML Confidence at entry: {position.get('initial_confidence', 0.0):.2%}\n"
             f"-------------------------------------\n"
-            f"Win Rate: {self.performance_metrics.get('win_rate', 0):.2f}% | Total P&L: {self.performance_metrics.get('total_pips', 0):.1f} pips"
+            f"Win Rate: {winrate:.2f}%"
         )
         self.send_discord_alert(message)
 
@@ -17683,15 +17772,10 @@ class EnhancedTradingBot:
             metrics = self.performance_metrics
             message = " **Performance Summary**\n\n"
             
-            # Win Rate
-            win_rate = metrics.get('win_rate', 0)
+            # Win Rate from closed positions file
+            win_rate = self.get_overall_winrate()
             win_rate_icon = "  " if win_rate >= 60 else "  " if win_rate >= 40 else "  "
             message += f"{win_rate_icon} **Win Rate:** {win_rate:.1f}%\n"
-            
-            # Total P&L
-            total_pips = metrics.get('total_pips', 0)
-            pips_icon = "  " if total_pips > 0 else "  " if total_pips < 0 else " "
-            message += f"{pips_icon} **Total P&L:** {total_pips:+.1f} pips\n"
             
             # Total Trades
             total_trades = metrics.get('total_trades', 0)
