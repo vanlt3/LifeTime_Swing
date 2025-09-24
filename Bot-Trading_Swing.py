@@ -6455,12 +6455,12 @@ class DailyNewsScheduler:
     
     def __init__(self, news_manager, symbols_to_track=None):
         self.news_manager = news_manager
-        self.symbols_to_track = symbols_to_track or ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"]
+        self.symbols_to_track = symbols_to_track or SYMBOLS  # Default to ALL symbols
         self.scheduler_active = False
         self.last_fetch_date = None
         self.fetch_times = [7, 8, 12, 16, 20]  # Hours to fetch news (UTC)
         self.scheduler_thread = None
-        print("📅 [Daily News Scheduler] Initialized")
+        print(f"📅 [Daily News Scheduler] Initialized with {len(self.symbols_to_track)} symbols: {', '.join(self.symbols_to_track)}")
     
     def start_scheduler(self):
         """Start the daily news scheduling"""
@@ -6479,6 +6479,12 @@ class DailyNewsScheduler:
         if self.scheduler_thread:
             self.scheduler_thread.join(timeout=5)
         print("⏹️ [Daily News Scheduler] Stopped")
+    
+    def fetch_news_now(self):
+        """Manually trigger news fetch for all symbols immediately"""
+        print("🚀 [Daily News Scheduler] Manual news fetch triggered...")
+        self._fetch_daily_news()
+        return True
     
     def _scheduler_loop(self):
         """Main scheduler loop"""
@@ -6534,8 +6540,19 @@ class DailyNewsScheduler:
                     time.sleep(2)
                     
                 except Exception as e:
-                    print(f"❌ [Daily News Scheduler] Error fetching news for {symbol}: {e}")
+                    error_msg = f"Error fetching news for {symbol}: {str(e)}"
+                    print(f"❌ [Daily News Scheduler] {error_msg}")
                     failed_symbols.append(symbol)
+                    
+                    # Log detailed error for debugging
+                    import traceback
+                    print(f"🔍 [Daily News Scheduler] Detailed error for {symbol}:")
+                    print(f"    Error type: {type(e).__name__}")
+                    print(f"    Error details: {str(e)}")
+                    if hasattr(e, '__traceback__'):
+                        tb_lines = traceback.format_tb(e.__traceback__)
+                        for line in tb_lines[-2:]:  # Show last 2 traceback lines
+                            print(f"    {line.strip()}")
             
             fetch_duration = (datetime.now() - fetch_start_time).total_seconds()
             
@@ -6553,13 +6570,20 @@ class DailyNewsScheduler:
             # Save daily summary
             self._save_daily_summary(summary)
             
-            print(f"📊 [Daily News Scheduler] Fetch completed:")
-            print(f"   - Symbols processed: {successful_symbols}/{len(self.symbols_to_track)}")
-            print(f"   - Total news items: {total_news}")
-            print(f"   - Duration: {fetch_duration:.1f} seconds")
+            # Enhanced summary display matching user requirements
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
+            print("\n" + "="*50)
+            print("📰 Daily News Update")
+            print(f"News fetch completed at {current_time}")
+            print("📊 Summary")
+            print(f"Symbols: {successful_symbols}/{len(self.symbols_to_track)}")
+            print(f"News Items: {total_news}")
+            print(f"Duration: {fetch_duration:.1f}s")
+            print("Trading Bot - Daily News Scheduler")
+            print("="*50)
             
             if failed_symbols:
-                print(f"   - Failed symbols: {', '.join(failed_symbols)}")
+                print(f"⚠️ Failed symbols: {', '.join(failed_symbols)}")
             
             # Send Discord notification if configured
             self._send_daily_news_notification(summary)
@@ -13820,7 +13844,7 @@ class EnhancedTradingBot:
             print("📅 [Bot Init] Initializing Daily News Scheduler...")
             self.news_scheduler = DailyNewsScheduler(
                 news_manager=self.news_manager,
-                symbols_to_track=SYMBOLS[:5] if len(SYMBOLS) > 5 else SYMBOLS  # Track first 5 symbols
+                symbols_to_track=SYMBOLS  # Track ALL symbols for comprehensive news coverage
             )
             # Start the scheduler
             self.news_scheduler.start_scheduler()
