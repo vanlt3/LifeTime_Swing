@@ -5689,7 +5689,7 @@ class NewsEconomicManager:
             # Initialize news file storage system
             self.news_storage_dir = "/workspace/news_data"
             self.daily_news_file = None
-            self.news_file_lock = False
+            self.news_file_lock = threading.Lock()  # Use proper thread-safe lock
             self._setup_news_storage()
             print("✅ [NewsEconomicManager] News file storage system initialized")
         
@@ -6033,21 +6033,25 @@ class NewsEconomicManager:
             today = datetime.now().strftime("%Y-%m-%d")
             self.daily_news_file = os.path.join(self.news_storage_dir, f"news_{today}.json")
             
-            # Initialize daily news file if it doesn't exist
+            # Initialize daily news file if it doesn't exist or is corrupted
             if not os.path.exists(self.daily_news_file):
-                initial_data = {
-                    "date": today,
-                    "created_at": datetime.now().isoformat(),
-                    "symbols": {},
-                    "summary": {
-                        "total_news": 0,
-                        "symbols_covered": 0,
-                        "last_updated": datetime.now().isoformat()
-                    }
-                }
-                with open(self.daily_news_file, 'w', encoding='utf-8') as f:
-                    json.dump(initial_data, f, indent=2, ensure_ascii=False, default=self._json_serializer)
-                print(f"📝 [News Storage] Created daily news file: {self.daily_news_file}")
+                self._create_fresh_news_file()
+            else:
+                # Validate existing file
+                try:
+                    with open(self.daily_news_file, 'r', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        if not content:
+                            raise json.JSONDecodeError("Empty file", "", 0)
+                        data = json.loads(content)
+                        if not isinstance(data, dict) or "symbols" not in data or "summary" not in data:
+                            raise ValueError("Invalid structure")
+                except (json.JSONDecodeError, ValueError) as e:
+                    print(f"⚠️ [News Storage] Existing file corrupted ({e}), recreating...")
+                    import time
+                    backup_file = f"{self.daily_news_file}.corrupted_{int(time.time())}"
+                    shutil.copy2(self.daily_news_file, backup_file)
+                    self._create_fresh_news_file()
             
             # Create news index file
             self.news_index_file = os.path.join(self.news_storage_dir, "news_index.json")
@@ -6057,13 +6061,24 @@ class NewsEconomicManager:
             print(f"❌ [News Storage] Error setting up storage: {e}")
     
     def _save_news_to_file(self, symbol, news_items):
-        """Save news items to daily file"""
-        if self.news_file_lock:
-            return  # Avoid concurrent writes
+        """Save news items to daily file with atomic writes and proper error handling"""
+        import tempfile
+        import shutil
+        
+        with self.news_file_lock:  # Use context manager for thread-safe locking
+            try:
+                self._save_news_to_file_atomic(symbol, news_items)
+            except Exception as e:
+                print(f"❌ [News Storage] Error saving news for {symbol}: {e}")
+                print(f"📋 [News Storage] Attempting recovery...")
+                self._recover_corrupted_news_file(symbol, news_items)
+    
+    def _save_news_to_file_atomic(self, symbol, news_items):
+        """Atomic save with validation"""
+        import tempfile
+        import shutil
         
         try:
-            self.news_file_lock = True
-            
             # Check if we need to create a new daily file
             today = datetime.now().strftime("%Y-%m-%d")
             expected_file = os.path.join(self.news_storage_dir, f"news_{today}.json")
@@ -6072,17 +6087,8 @@ class NewsEconomicManager:
                 self.daily_news_file = expected_file
                 self._setup_news_storage()
             
-            # Load existing data with error handling
-            try:
-                with open(self.daily_news_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, FileNotFoundError) as e:
-                print(f"⚠️ [News Storage] Error loading {self.daily_news_file}: {e}")
-                print(f"🔧 [News Storage] Recreating file with fresh structure...")
-                # Recreate the file with proper structure
-                self._setup_news_storage()
-                with open(self.daily_news_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+            # Load existing data with robust error handling
+            data = self._load_news_data_safely()
             
             # Add/update symbol news
             if symbol not in data["symbols"]:
@@ -6108,19 +6114,120 @@ class NewsEconomicManager:
                 data["summary"]["symbols_covered"] = len(data["symbols"])
                 data["summary"]["last_updated"] = datetime.now().isoformat()
                 
-                # Save updated data
-                with open(self.daily_news_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False, default=self._json_serializer)
+                # Atomic save with validation
+                self._atomic_json_write(self.daily_news_file, data)
                 
                 print(f"💾 [News Storage] Saved {len(new_items)} new items for {symbol}")
                 
                 # Update index
                 self._update_news_index()
-            
+        
         except Exception as e:
-            print(f"❌ [News Storage] Error saving news for {symbol}: {e}")
-        finally:
-            self.news_file_lock = False
+            raise e  # Re-raise for parent handler
+    
+    def _load_news_data_safely(self):
+        """Safely load news data with error recovery"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if not os.path.exists(self.daily_news_file):
+                    self._setup_news_storage()
+                
+                with open(self.daily_news_file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if not content:
+                        raise json.JSONDecodeError("Empty file", "", 0)
+                    data = json.loads(content)
+                    
+                # Validate data structure
+                if not isinstance(data, dict) or "symbols" not in data or "summary" not in data:
+                    raise ValueError("Invalid news data structure")
+                
+                return data
+                
+            except (json.JSONDecodeError, FileNotFoundError, ValueError) as e:
+                print(f"⚠️ [News Storage] Attempt {attempt + 1}/{max_retries} - Error loading {self.daily_news_file}: {e}")
+                if attempt < max_retries - 1:
+                    print(f"🔧 [News Storage] Recreating file with fresh structure...")
+                    self._setup_news_storage()
+                else:
+                    print(f"❌ [News Storage] Failed to load after {max_retries} attempts, creating fresh file")
+                    self._create_fresh_news_file()
+                    return self._load_news_data_safely()
+    
+    def _atomic_json_write(self, target_file, data):
+        """Write JSON data atomically to prevent corruption"""
+        import tempfile
+        import shutil
+        
+        # Create temporary file in the same directory
+        temp_dir = os.path.dirname(target_file)
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', 
+                                       dir=temp_dir, delete=False, suffix='.tmp') as temp_file:
+            try:
+                # Validate data can be serialized
+                json_str = json.dumps(data, indent=2, ensure_ascii=False, default=self._json_serializer)
+                
+                # Validate JSON is parseable
+                json.loads(json_str)
+                
+                # Write to temp file
+                temp_file.write(json_str)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())  # Force write to disk
+                
+                temp_filename = temp_file.name
+            
+            except Exception as e:
+                os.unlink(temp_file.name)  # Clean up temp file
+                raise ValueError(f"JSON serialization failed: {e}")
+        
+        # Atomic move
+        try:
+            shutil.move(temp_filename, target_file)
+        except Exception as e:
+            if os.path.exists(temp_filename):
+                os.unlink(temp_filename)
+            raise IOError(f"Atomic move failed: {e}")
+    
+    def _create_fresh_news_file(self):
+        """Create a fresh news file with proper structure"""
+        today = datetime.now().strftime("%Y-%m-%d")
+        initial_data = {
+            "date": today,
+            "created_at": datetime.now().isoformat(),
+            "symbols": {},
+            "summary": {
+                "total_news": 0,
+                "symbols_covered": 0,
+                "last_updated": datetime.now().isoformat()
+            }
+        }
+        self._atomic_json_write(self.daily_news_file, initial_data)
+        print(f"📝 [News Storage] Created fresh daily news file: {self.daily_news_file}")
+    
+    def _recover_corrupted_news_file(self, symbol, news_items):
+        """Recover from corrupted news file"""
+        try:
+            print(f"🔧 [News Storage] Attempting to recover corrupted file for {symbol}")
+            
+            # Try to backup corrupted file
+            import time
+            backup_file = f"{self.daily_news_file}.corrupted_{int(time.time())}"
+            if os.path.exists(self.daily_news_file):
+                shutil.copy2(self.daily_news_file, backup_file)
+                print(f"📋 [News Storage] Backed up corrupted file to: {backup_file}")
+            
+            # Create fresh file
+            self._create_fresh_news_file()
+            
+            # Try to save the news items again
+            self._save_news_to_file_atomic(symbol, news_items)
+            print(f"✅ [News Storage] Successfully recovered and saved news for {symbol}")
+            
+        except Exception as recovery_error:
+            print(f"❌ [News Storage] Recovery failed: {recovery_error}")
+            print(f"🆘 [News Storage] Manual intervention may be required for {self.daily_news_file}")
     
     def _json_serializer(self, obj):
         """Custom JSON serializer to handle pandas Timestamp and datetime objects"""
@@ -6160,9 +6267,8 @@ class NewsEconomicManager:
             index_data["total_files"] = len(index_data["available_dates"])
             index_data["symbols_tracked"] = sorted(list(index_data["symbols_tracked"]))
             
-            # Save index
-            with open(self.news_index_file, 'w', encoding='utf-8') as f:
-                json.dump(index_data, f, indent=2, ensure_ascii=False, default=self._json_serializer)
+            # Save index atomically
+            self._atomic_json_write(self.news_index_file, index_data)
                 
         except Exception as e:
             print(f"❌ [News Storage] Error updating index: {e}")
@@ -6485,9 +6591,8 @@ class DailyNewsScheduler:
             # Add new summary
             summaries.append(summary)
             
-            # Save updated summaries
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                json.dump(summaries, f, indent=2, ensure_ascii=False, default=self.news_manager._json_serializer)
+            # Save updated summaries atomically
+            self.news_manager._atomic_json_write(summary_file, summaries)
             
             print(f"💾 [Daily News Scheduler] Summary saved to {summary_file}")
             
