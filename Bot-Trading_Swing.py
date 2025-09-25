@@ -14730,7 +14730,7 @@ class EnhancedTradingBot:
                 trades_query = """
                     SELECT pips, entry_price, exit_price, id, closed_at
                     FROM trades 
-                    WHERE symbol =  AND exit_price IS NOT NULL
+                    WHERE symbol = ? AND exit_price IS NOT NULL
                     ORDER BY id DESC
                     LIMIT 100
                 """
@@ -14738,7 +14738,7 @@ class EnhancedTradingBot:
                 trades_query = """
                     SELECT pips, entry_price, exit_price, opened_at, closed_at
                     FROM trades 
-                    WHERE symbol =  AND exit_price IS NOT NULL
+                    WHERE symbol = ? AND exit_price IS NOT NULL
                     ORDER BY opened_at DESC
                     LIMIT 100
                 """
@@ -16702,11 +16702,20 @@ class EnhancedTradingBot:
             ).get(primary_tf)
             
             if df_primary_tf is not None and not df_primary_tf.empty:
+                # Check if we have enough data for ATR calculation
+                min_required_data = RISK_MANAGEMENT["VOLATILITY_LOOKBACK"] + 1
+                if len(df_primary_tf) < min_required_data:
+                    self._log_and_print("warning", f"Insufficient data for volatility adjustment for {symbol}: {len(df_primary_tf)} candles, need {min_required_data}")
+                    return 0.8
+                
+                # Use a smaller window if we don't have enough data
+                atr_window = min(RISK_MANAGEMENT["VOLATILITY_LOOKBACK"], len(df_primary_tf) - 1)
+                
                 atr_indicator = AverageTrueRange(
                     df_primary_tf["high"], 
                     df_primary_tf["low"], 
                     df_primary_tf["close"], 
-                    window=RISK_MANAGEMENT["VOLATILITY_LOOKBACK"]
+                    window=atr_window
                 )
                 atr_normalized = (atr_indicator.average_true_range() / df_primary_tf["close"]).ffill().bfill()
                 recent_volatility = atr_normalized.dropna().iloc[-1] if not atr_normalized.dropna().empty else 0.01
@@ -16724,11 +16733,25 @@ class EnhancedTradingBot:
                 symbol, count=RISK_MANAGEMENT["VOLATILITY_LOOKBACK"] + 5
             ).get(PRIMARY_TIMEFRAME)
             if df_primary_tf is not None and not df_primary_tf.empty:
+                # Check if we have enough data for ATR calculation
+                min_required_data = RISK_MANAGEMENT["VOLATILITY_LOOKBACK"] + 1
+                if len(df_primary_tf) < min_required_data:
+                    self._log_and_print("warning", f"Insufficient data for enhanced risk management for {symbol}: {len(df_primary_tf)} candles, need {min_required_data}")
+                    # Return fallback values
+                    return {
+                        "position_size": 0.01,
+                        "stop_loss": current_price * 0.98 if signal == "BUY" else current_price * 1.02,
+                        "take_profit": current_price * 1.02 if signal == "BUY" else current_price * 0.98
+                    }
+                
+                # Use a smaller window if we don't have enough data
+                atr_window = min(RISK_MANAGEMENT["VOLATILITY_LOOKBACK"], len(df_primary_tf) - 1)
+                
                 atr_indicator = AverageTrueRange(
                     df_primary_tf["high"],
                     df_primary_tf["low"],
                     df_primary_tf["close"],
-                    window=RISK_MANAGEMENT["VOLATILITY_LOOKBACK"],
+                    window=atr_window,
                 )
                 atr_value = (
                     atr_indicator.average_true_range().dropna().iloc[-1]
@@ -21056,7 +21079,34 @@ class AdvancedEntryTPSLCalculator:
 
     def _calculate_atr_from_data(self, market_data):
         """Calculate ATR from market data if not provided"""
-        if market_data is None or len(market_data) < 14:
+        try:
+            if market_data is None:
+                return 0.001  # Default ATR
+            
+            # Get price data from market_data
+            price_data = market_data.get('price_data')
+            if price_data is None or len(price_data) < 14:
+                return 0.001  # Default ATR
+            
+            # Calculate ATR with safe window size
+            atr_window = min(14, len(price_data) - 1)
+            if atr_window < 2:
+                return 0.001
+                
+            atr_indicator = AverageTrueRange(
+                price_data["high"], 
+                price_data["low"], 
+                price_data["close"], 
+                window=atr_window
+            )
+            atr_series = atr_indicator.average_true_range().dropna()
+            
+            if len(atr_series) > 0:
+                return atr_series.iloc[-1]
+            else:
+                return 0.001  # Default ATR
+        except Exception as e:
+            print(f"❌ Error calculating ATR from data: {e}")
             return 0.001  # Default ATR
 
     def _calculate_entry_confidence(self, symbol, signal, entry_price, technical_data):
@@ -21898,7 +21948,7 @@ class AdvancedFeatureStore:
         query = """
             SELECT timestamp, feature_name, feature_value
             FROM features
-            WHERE symbol =  AND timeframe = 
+            WHERE symbol = ? AND timeframe = ?
         """
         params = [symbol, timeframe]
 
