@@ -112,9 +112,20 @@ class RealTimeMonitor:
                 # Kiểm tra từng vị thế
                 positions_to_close = []
                 for symbol, position in self.positions_to_monitor.items():
-                    hit_result = await self._check_sl_tp_hit(symbol, position)
-                    if hit_result:
-                        positions_to_close.append((symbol, hit_result))
+                    try:
+                        # Validate position structure
+                        required_fields = ['signal', 'sl', 'tp']
+                        if not all(field in position for field in required_fields):
+                            self.logger.warning(f"⚠️ [Real-time Monitor] Invalid position structure for {symbol}: missing fields")
+                            continue
+                            
+                        hit_result = await self._check_sl_tp_hit(symbol, position)
+                        if hit_result:
+                            positions_to_close.append((symbol, hit_result))
+                            self.logger.info(f"🎯 [Real-time Monitor] {symbol} {hit_result['type']} hit detected at {hit_result['price']}")
+                    except Exception as e:
+                        self.logger.error(f"❌ [Real-time Monitor] Error checking position {symbol}: {e}")
+                        continue
                 
                 # Xử lý các vị thế cần đóng
                 for symbol, hit_result in positions_to_close:
@@ -164,18 +175,27 @@ class RealTimeMonitor:
     def _check_current_price_hit(self, position, current_price):
         """Kiểm tra SL/TP với giá hiện tại"""
         signal = position['signal']
-        sl_price = position['sl']
-        tp_price = position['tp']
+        sl_price = float(position['sl'])
+        tp_price = float(position['tp'])
+        current_price = float(current_price)
+        
+        # Log detailed price comparison for debugging
+        symbol = position.get('symbol', 'Unknown')
+        self.logger.debug(f"[Real-time Monitor] {symbol} Price Check: Current={current_price:.5f}, SL={sl_price:.5f}, TP={tp_price:.5f}, Signal={signal}")
         
         if signal == "BUY":
             if current_price <= sl_price:
+                self.logger.info(f"🔴 [Real-time Monitor] {symbol} BUY SL hit: {current_price:.5f} <= {sl_price:.5f}")
                 return "SL"
             elif current_price >= tp_price:
+                self.logger.info(f"🟢 [Real-time Monitor] {symbol} BUY TP hit: {current_price:.5f} >= {tp_price:.5f}")
                 return "TP"
         else:  # SELL
             if current_price >= sl_price:
+                self.logger.info(f"🔴 [Real-time Monitor] {symbol} SELL SL hit: {current_price:.5f} >= {sl_price:.5f}")
                 return "SL"
             elif current_price <= tp_price:
+                self.logger.info(f"🟢 [Real-time Monitor] {symbol} SELL TP hit: {current_price:.5f} <= {tp_price:.5f}")
                 return "TP"
         
         return None
@@ -263,12 +283,14 @@ class RealTimeMonitor:
             try:
                 # Thử lấy từ data manager
                 price = self.data_manager.get_current_price(symbol)
-                if price is not None:
+                if price is not None and price > 0:
+                    self.logger.debug(f"[Real-time Monitor] {symbol} price from data_manager: {price:.5f}")
                     return price
                 
                 # Fallback: lấy từ API trực tiếp
                 price = await self._fetch_price_from_api(symbol)
-                if price is not None:
+                if price is not None and price > 0:
+                    self.logger.debug(f"[Real-time Monitor] {symbol} price from API: {price:.5f}")
                     return price
                     
             except Exception as e:
@@ -276,6 +298,7 @@ class RealTimeMonitor:
                 if attempt < MAX_REALTIME_RETRIES - 1:
                     await asyncio.sleep(1)
         
+        self.logger.error(f"❌ [Real-time Monitor] Failed to get price for {symbol} after {MAX_REALTIME_RETRIES} attempts")
         return None
     
     async def _fetch_price_from_api(self, symbol):
@@ -18642,7 +18665,7 @@ class EnhancedTradingBot:
                 return
 
             # Get features DataFrame for price action analysis
-            features_df = self.data_manager.get_features_dataframe(symbol)
+            features_df = self.data_manager.create_enhanced_features(symbol)
             if features_df is None or features_df.empty:
                 print(f"[{symbol}] Warning: No features data available, using fallback")
                 features_df = pd.DataFrame()
@@ -18895,20 +18918,115 @@ class EnhancedTradingBot:
         
         status = self.realtime_monitor.get_monitoring_status()
         
-        print("\n🔄 [Real-time Monitor] Status:")
-        print(f"   - Active: {'✅' if status['monitoring_active'] else '❌'}")
-        print(f"   - Positions monitored: {status['positions_count']}")
-        if status['monitored_symbols']:
-            print(f"   - Symbols: {', '.join(status['monitored_symbols'])}")
+        # Enhanced status display with position details
+        print(f"\n🔍 [Real-time Monitor] Status:")
+        print(f"   - Active: {status.get('active', False)}")
+        print(f"   - Enabled: {status.get('enabled', False)}")
+        print(f"   - Positions Count: {status.get('positions_count', 0)}")
+        print(f"   - Check Interval: {status.get('check_interval', 0)}s")
         
-        config = status['config']
-        print(f"\n🛠️ [Real-time Monitor] Configuration:")
-        print(f"   - Enabled: {'✅' if config['enabled'] else '❌'}")
+        if status.get('monitored_symbols'):
+            print(f"   - Monitored Symbols: {', '.join(status['monitored_symbols'])}")
+            
+            # Show position details for debugging
+            for symbol in status['monitored_symbols']:
+                if symbol in self.open_positions:
+                    pos = self.open_positions[symbol]
+                    print(f"     • {symbol}: {pos['signal']} | Entry: {pos['entry_price']:.5f} | SL: {pos['sl']:.5f} | TP: {pos['tp']:.5f}")
+        else:
+            print("   - No positions being monitored")
         print(f"   - Check interval: {config['check_interval']}s")
         print(f"   - Wick detection: {'✅' if config['wick_detection'] else '❌'}")
         print(f"   - Wick candles: {config['wick_candles']}")
         print(f"   - Max retries: {config['max_retries']}")
         print(f"   - Timeout: {config['timeout']}s")
+    
+    async def test_sl_tp_detection(self, symbol=None):
+        """Test SL/TP detection manually for debugging"""
+        if not hasattr(self, 'realtime_monitor') or not self.realtime_monitor:
+            print("❌ [Test] Real-time monitor not initialized")
+            return
+        
+        if not self.open_positions:
+            print("⚠️ [Test] No open positions to test")
+            return
+        
+        symbols_to_test = [symbol] if symbol else list(self.open_positions.keys())
+        
+        print(f"\n🧪 [Test] Testing SL/TP detection for: {', '.join(symbols_to_test)}")
+        
+        for test_symbol in symbols_to_test:
+            if test_symbol not in self.open_positions:
+                print(f"⚠️ [Test] No position found for {test_symbol}")
+                continue
+                
+            position = self.open_positions[test_symbol]
+            print(f"\n📊 [Test] {test_symbol} Position:")
+            print(f"   Signal: {position['signal']}")
+            print(f"   Entry: {position['entry_price']:.5f}")
+            print(f"   SL: {position['sl']:.5f}")
+            print(f"   TP: {position['tp']:.5f}")
+            
+            # Test price fetching
+            try:
+                current_price = await self.realtime_monitor._get_realtime_price(test_symbol)
+                if current_price:
+                    print(f"   Current Price: {current_price:.5f}")
+                    
+                    # Test SL/TP logic
+                    hit_result = self.realtime_monitor._check_current_price_hit(position, current_price)
+                    if hit_result:
+                        print(f"   🎯 {hit_result} HIT DETECTED!")
+                    else:
+                        print(f"   ✅ No SL/TP hit")
+                        
+                        # Show distance to SL/TP
+                        if position['signal'] == 'BUY':
+                            sl_distance = (current_price - position['sl']) / current_price * 100
+                            tp_distance = (position['tp'] - current_price) / current_price * 100
+                        else:
+                            sl_distance = (position['sl'] - current_price) / current_price * 100  
+                            tp_distance = (current_price - position['tp']) / current_price * 100
+                            
+                        print(f"   Distance to SL: {sl_distance:.2f}%")
+                        print(f"   Distance to TP: {tp_distance:.2f}%")
+                else:
+                    print(f"   ❌ Failed to get current price")
+                    
+            except Exception as e:
+                print(f"   ❌ Error testing {test_symbol}: {e}")
+    
+    async def _check_realtime_monitoring_health(self):
+        """Check if real-time monitoring is working properly"""
+        if not hasattr(self, 'realtime_monitor') or not self.realtime_monitor:
+            return
+            
+        # Only check every 10 cycles (roughly every 10 minutes)
+        if not hasattr(self, '_monitoring_health_counter'):
+            self._monitoring_health_counter = 0
+        
+        self._monitoring_health_counter += 1
+        if self._monitoring_health_counter < 10:
+            return
+        
+        self._monitoring_health_counter = 0
+        
+        status = self.realtime_monitor.get_monitoring_status()
+        
+        # Check if monitoring should be active but isn't
+        if self.open_positions and not status.get('monitoring_active', False):
+            print(f"⚠️ [Health Check] Real-time monitoring should be active but isn't. Restarting...")
+            self.logger.warning("Real-time monitoring health check failed - restarting monitoring")
+            self.realtime_monitor.start_monitoring(self.open_positions)
+        
+        # Check if monitoring is active but no positions
+        elif not self.open_positions and status.get('monitoring_active', False):
+            print(f"🔄 [Health Check] No positions but monitoring is active. Stopping...")
+            self.realtime_monitor.stop_monitoring()
+        
+        # Log status for debugging
+        if self.open_positions:
+            print(f"🔍 [Health Check] Monitoring {len(self.open_positions)} positions: {list(self.open_positions.keys())}")
 
     async def close_position_enhanced(self, symbol, reason, exit_price, send_alert=True):
         if symbol not in self.open_positions:
@@ -20557,9 +20675,14 @@ class EnhancedTradingBot:
         self.send_discord_alert(" **Advanced Bot Started Successfully!**", "SUCCESS", "NORMAL", startup_data)
 
         # Khởi động real-time monitoring cho các vị thế hiện có
-        if hasattr(self, 'realtime_monitor') and self.realtime_monitor and self.open_positions:
-            self.realtime_monitor.start_monitoring(self.open_positions)
-            print(f"🔄 [Real-time Monitor] Started monitoring {len(self.open_positions)} existing positions")
+        if hasattr(self, 'realtime_monitor') and self.realtime_monitor:
+            if self.open_positions:
+                self.realtime_monitor.start_monitoring(self.open_positions)
+                print(f"🔄 [Real-time Monitor] Started monitoring {len(self.open_positions)} existing positions")
+            else:
+                print("🔄 [Real-time Monitor] No existing positions to monitor")
+        else:
+            print("❌ [Real-time Monitor] Not initialized")
         
         # Hiển thị trạng thái real-time monitoring
         self.display_realtime_monitoring_status()
@@ -20613,7 +20736,10 @@ class EnhancedTradingBot:
         # 5. Position management
         await self._handle_position_management(live_data_cache)
         
-        # 5.1. Master Agent trailing stop management (ONLY system for trailing stops)
+        # 5.1. Real-time monitoring health check
+        await self._check_realtime_monitoring_health()
+        
+        # 5.2. Master Agent trailing stop management (ONLY system for trailing stops)
         self._apply_master_agent_trailing_stops()
         
         # 6. Trading strategy execution
