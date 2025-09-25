@@ -4655,7 +4655,7 @@ class OnlineLearningManager:
             symbol = feedback_data['symbol']
             final_decision = feedback_data['final_decision']
             final_confidence = feedback_data['final_confidence']
-            decision_consistency = feedback_data['decision_consistency']
+            decision_consistency = feedback_data.get('decision_consistency', 1.0)  # Default to 1.0 if missing
             
             # T o training sample from feedback
             training_sample = self._create_training_sample_from_feedback(feedback_data)
@@ -4696,7 +4696,7 @@ class OnlineLearningManager:
                     'features': features,
                     'target': target,
                     'confidence': feedback_data['final_confidence'],
-                    'consistency': feedback_data['decision_consistency']
+                    'consistency': feedback_data.get('decision_consistency', 1.0)
                 }
             
             return None
@@ -4915,7 +4915,7 @@ class OnlineLearningManager:
                 'timestamp': feedback_data['timestamp'],
                 'decision': feedback_data['final_decision'],
                 'confidence': feedback_data['final_confidence'],
-                'consistency': feedback_data['decision_consistency']
+                'consistency': feedback_data.get('decision_consistency', 1.0)
             })
             
             # Gich100 records g n nh t
@@ -4935,7 +4935,7 @@ class OnlineLearningManager:
                 performance_data = {
                     'recent_decisions': [feedback_data['final_decision']],
                     'recent_confidences': [feedback_data['final_confidence']],
-                    'consistency_scores': [feedback_data['decision_consistency']]
+                    'consistency_scores': [feedback_data.get('decision_consistency', 1.0)]
                 }
                 
                 # Check drift
@@ -12437,6 +12437,143 @@ class MasterAgent:
         }
         
         print("✅ [Master Agent] Master Agent initialized successfully")
+    
+    def coordinate_decision(self, task_type, market_data, symbol):
+        """Decision coordination for all specialist agents"""
+        print(f"[Master Agent Coordinator] Starting coordinate_decision for {symbol}")
+        logging.info(f"[Master Agent Coordinator] Starting coordinate_decision for {symbol}")
+        
+        try:
+            # Decompose task
+            subtasks = self.decompose_task(task_type, market_data)
+            print(f" [Master Agent Coordinator] Decomposed tasks: {list(subtasks.keys())}")
+            
+            # Collect opinions from specialist agents
+            agent_opinions = {}
+            agent_confidences = {}
+            
+            for subtask_name, data in subtasks.items():
+                # Map subtask names to agent names
+                agent_mapping = {
+                    'trend_analysis': 'trend_analyzer',
+                    'news_analysis': 'news_analyzer', 
+                    'risk_assessment': 'risk_manager',
+                    'sentiment_analysis': 'sentiment_analyzer',
+                    'volatility_prediction': 'volatility_predictor',
+                    'portfolio_optimization': 'portfolio_optimizer'
+                }
+                
+                agent_name = agent_mapping.get(subtask_name, subtask_name)
+                if agent_name in self.specialist_agents:
+                    print(f" [Master Agent Coordinator] Starting analysis with {agent_name}")
+                    agent = self.specialist_agents[agent_name]
+                    try:
+                        opinion, confidence = agent.analyze(data, symbol)
+                        agent_opinions[subtask_name] = opinion
+                        agent_confidences[subtask_name] = confidence
+                        print(f" [Master Agent Coordinator] {subtask_name}: {opinion} ({confidence:.2%})")
+                    except Exception as e:
+                        print(f"[Master Agent Coordinator] Error in {subtask_name}: {e}")
+                        agent_opinions[subtask_name] = "HOLD"
+                        agent_confidences[subtask_name] = 0.5
+            
+            # Apply consensus mechanism
+            final_decision, final_confidence = self._apply_consensus_mechanism(
+                agent_opinions, agent_confidences, symbol
+            )
+            
+            print(f" [Master Agent Coordinator] Final decision for {symbol}: {final_decision} ({final_confidence:.2%})")
+            
+            # Update agent performance
+            self._update_agent_performance(agent_opinions, agent_confidences, symbol)
+            
+            return final_decision, final_confidence
+            
+        except Exception as e:
+            print(f"[Master Agent Coordinator] Error in coordinate_decision: {e}")
+            logging.error(f"Error in Master Agent coordination: {e}")
+            return "HOLD", 0.5
+    
+    def decompose_task(self, task_type, market_data):
+        """Decompose task into subtasks for specialist agents"""
+        subtasks = {}
+        
+        if task_type == 'trading_decision':
+            subtasks['trend_analysis'] = market_data
+            subtasks['news_analysis'] = market_data
+            subtasks['risk_assessment'] = market_data
+            subtasks['sentiment_analysis'] = market_data
+            subtasks['volatility_prediction'] = market_data
+            subtasks['portfolio_optimization'] = market_data
+            
+        return subtasks
+    
+    def _apply_consensus_mechanism(self, opinions, confidences, symbol):
+        """Apply consensus mechanism to agent opinions"""
+        try:
+            # Weight votes by confidence
+            weighted_votes = {}
+            total_weight = 0.0
+            
+            for agent, opinion in opinions.items():
+                confidence = confidences.get(agent, 0.5)
+                if opinion not in weighted_votes:
+                    weighted_votes[opinion] = 0.0
+                weighted_votes[opinion] += confidence
+                total_weight += confidence
+            
+            # Find decision with highest weighted score
+            if weighted_votes:
+                best_decision = max(weighted_votes, key=weighted_votes.get)
+                final_confidence = weighted_votes[best_decision] / total_weight if total_weight > 0 else 0.5
+                return best_decision, min(final_confidence, 0.95)
+            else:
+                return "HOLD", 0.5
+                
+        except Exception as e:
+            print(f"[Master Agent Coordinator] Error in consensus mechanism: {e}")
+            return "HOLD", 0.5
+    
+    def _update_agent_performance(self, opinions, confidences, symbol):
+        """Update performance of agents"""
+        try:
+            if not hasattr(self, 'agent_performance'):
+                self.agent_performance = {}
+                
+            for agent_name in opinions.keys():
+                if agent_name not in self.agent_performance:
+                    self.agent_performance[agent_name] = {}
+                if symbol not in self.agent_performance[agent_name]:
+                    self.agent_performance[agent_name][symbol] = 0.5
+                    
+        except Exception as e:
+            print(f"[Master Agent Coordinator] Error updating agent performance: {e}")
+        
+    def _setup_communication_matrix(self):
+        """Setup communication matrix between agents"""
+        agents = list(self.specialist_agents.keys())
+        self.communication_matrix = {}
+        
+        for agent1 in agents:
+            self.communication_matrix[agent1] = {}
+            for agent2 in agents:
+                if agent1 != agent2:
+                    # Define communication strength based on agent types
+                    comm_strength = self._calculate_communication_strength(agent1, agent2)
+                    self.communication_matrix[agent1][agent2] = comm_strength
+                else:
+                    self.communication_matrix[agent1][agent2] = 1.0
+    
+    def _calculate_communication_strength(self, agent1, agent2):
+        """Calculate communication strength between two agents"""
+        # Define which agents should communicate more strongly
+        communication_pairs = [
+            ('trend_analyzer', 'risk_manager'),
+            ('news_analyzer', 'trend_analyzer'),
+            ('sentiment_analyzer', 'portfolio_optimizer')
+        ]
+        
+        return (agent1, agent2) in communication_pairs or (agent2, agent1) in communication_pairs
     
     def initialize_specialist_agents(self):
         """Initialize all specialist agents"""
