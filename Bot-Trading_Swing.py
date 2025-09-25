@@ -9873,6 +9873,23 @@ class EnhancedDataManager:
                     if col not in df_enhanced.columns:
                         df_enhanced[col] = 0.0
 
+            # <<< ADD ECONOMIC EVENT FEATURES >>>
+            # Add economic features that are required by the model
+            try:
+                print(f" [Features] Adding economic event features for {symbol}...")
+                if hasattr(self, 'news_manager') and self.news_manager is not None:
+                    df_enhanced = self.news_manager.add_economic_event_features(df_enhanced, symbol)
+                    print(f"[Features] Economic event features added for {symbol}")
+                else:
+                    # Add basic economic features if news_manager is not available
+                    print(f" [Features] News manager not available, adding basic economic features for {symbol}")
+                    self._add_basic_economic_features_direct(df_enhanced, symbol)
+            except Exception as e:
+                logging.error(f"Error adding economic features for {symbol}: {e}")
+                print(f"[Features] Error adding economic features for {symbol}: {e}")
+                # Add basic economic features as fallback
+                self._add_basic_economic_features_direct(df_enhanced, symbol)
+
             return df_enhanced
 
     def _encode_categorical_features(self, df, symbol):
@@ -9990,6 +10007,47 @@ class EnhancedDataManager:
         print(f"   [Encoding] Total {len(encoded_cols)} features encoded: {encoded_cols[:5]}...")
 
         return df
+
+    def _add_basic_economic_features_direct(self, df, symbol):
+        """Add basic economic event features directly to DataFrame"""
+        try:
+            # Add basic economic calendar features based on common patterns
+            df["is_near_high_impact_event"] = 0
+            
+            # Add day-of-week effects (common economic events happen on specific days)
+            df["is_friday"] = (df.index.dayofweek == 4).astype(int)
+            df["is_monday"] = (df.index.dayofweek == 0).astype(int)
+            
+            # Add month-end effects (common for economic data releases)
+            df["is_month_end"] = (df.index.day >= 25).astype(int)
+            
+            # Add quarterly effects (Q1, Q2, Q3, Q4)
+            df["quarter"] = df.index.quarter
+            df["is_q1"] = (df.index.quarter == 1).astype(int)
+            df["is_q2"] = (df.index.quarter == 2).astype(int)
+            df["is_q3"] = (df.index.quarter == 3).astype(int)
+            df["is_q4"] = (df.index.quarter == 4).astype(int)
+            
+            # Add holiday proximity effects (simplified)
+            df["is_holiday_proximity"] = 0  # Placeholder for holiday effects
+            
+            # Ensure all required features exist
+            required_features = ['is_q1', 'is_q2', 'is_q3', 'is_q4', 'is_month_end', 'is_holiday_proximity']
+            for feature in required_features:
+                if feature not in df.columns:
+                    df[feature] = 0
+                    
+            print(f"   [Features] Basic economic features added for {symbol}")
+            return df
+            
+        except Exception as e:
+            logging.error(f"Error adding basic economic features for {symbol}: {e}")
+            # Fallback: ensure critical features exist with default values
+            critical_features = ['is_q1', 'is_q2', 'is_q3', 'is_q4', 'is_month_end']
+            for feature in critical_features:
+                if feature not in df.columns:
+                    df[feature] = 0
+            return df
 
     # TFunction Function M I this VO in L P EnhancedDataManager
 
