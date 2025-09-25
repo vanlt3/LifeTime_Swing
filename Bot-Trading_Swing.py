@@ -2358,7 +2358,12 @@ ENTRY_TP_SL_CONFIG = {
         "volume_confirmation": False,
         "session_filter": False,
         "volatility_adjustment": True,
-        "fibonacci_levels": [0.236, 0.382, 0.5, 0.618, 0.786]
+        "fibonacci_levels": [0.236, 0.382, 0.5, 0.618, 0.786],
+        # Master Agent Trailing Stop Configuration
+        "min_trailing_profit": 0.012,  # 1.2% minimum profit to activate trailing
+        "trailing_atr_multiplier": 1.5,  # ATR multiplier for trailing distance
+        "trailing_volatility_threshold": 0.6,  # Volatility threshold for activation
+        "trailing_trend_strength_min": 0.7  # Minimum trend strength for trailing
     },
     "XAGUSD": {
         "entry_method": "fibonacci_confluence",
@@ -2370,7 +2375,12 @@ ENTRY_TP_SL_CONFIG = {
         "volume_confirmation": False,
         "session_filter": False,
         "volatility_adjustment": True,
-        "fibonacci_levels": [0.236, 0.382, 0.5, 0.618, 0.786]
+        "fibonacci_levels": [0.236, 0.382, 0.5, 0.618, 0.786],
+        # Master Agent Trailing Stop Configuration
+        "min_trailing_profit": 0.015,  # 1.5% minimum profit to activate trailing
+        "trailing_atr_multiplier": 1.8,  # ATR multiplier for trailing distance
+        "trailing_volatility_threshold": 0.5,  # Volatility threshold for activation
+        "trailing_trend_strength_min": 0.6  # Minimum trend strength for trailing
     },
     "USOIL": {
         "entry_method": "trend_following",
@@ -2381,7 +2391,12 @@ ENTRY_TP_SL_CONFIG = {
         "support_resistance_weight": 0.3,
         "volume_confirmation": True,
         "session_filter": False,
-        "volatility_adjustment": True
+        "volatility_adjustment": True,
+        # Master Agent Trailing Stop Configuration
+        "min_trailing_profit": 0.018,  # 1.8% minimum profit to activate trailing
+        "trailing_atr_multiplier": 2.0,  # ATR multiplier for trailing distance
+        "trailing_volatility_threshold": 0.7,  # Volatility threshold for activation
+        "trailing_trend_strength_min": 0.8  # Minimum trend strength for trailing
     },
 
     # === EQUITY INDICES (Session-based Trading) ===
@@ -2495,7 +2510,12 @@ ENTRY_TP_SL_CONFIG = {
         "support_resistance_weight": 0.25,
         "volume_confirmation": True,
         "session_filter": True,
-        "volatility_adjustment": True
+        "volatility_adjustment": True,
+        # Master Agent Trailing Stop Configuration
+        "min_trailing_profit": 0.008,  # 0.8% minimum profit to activate trailing
+        "trailing_atr_multiplier": 1.2,  # ATR multiplier for trailing distance
+        "trailing_volatility_threshold": 0.4,  # Volatility threshold for activation
+        "trailing_trend_strength_min": 0.6  # Minimum trend strength for trailing
     },
     "AUDUSD": {
         "entry_method": "asian_session_breakout",
@@ -2688,7 +2708,12 @@ ENTRY_TP_SL_CONFIG = {
         "support_resistance_weight": 0.25,
         "volume_confirmation": False,
         "session_filter": False,
-        "volatility_adjustment": True
+        "volatility_adjustment": True,
+        # Master Agent Trailing Stop Configuration
+        "min_trailing_profit": 0.016,  # 1.6% minimum profit to activate trailing
+        "trailing_atr_multiplier": 2.5,  # ATR multiplier for trailing distance
+        "trailing_volatility_threshold": 0.8,  # High volatility threshold for crypto
+        "trailing_trend_strength_min": 0.7  # Minimum trend strength for trailing
     },
     "ETHUSD": {
         "entry_method": "volatility_breakout",
@@ -2699,7 +2724,12 @@ ENTRY_TP_SL_CONFIG = {
         "support_resistance_weight": 0.25,
         "volume_confirmation": False,
         "session_filter": False,
-        "volatility_adjustment": True
+        "volatility_adjustment": True,
+        # Master Agent Trailing Stop Configuration
+        "min_trailing_profit": 0.018,  # 1.8% minimum profit to activate trailing
+        "trailing_atr_multiplier": 2.8,  # ATR multiplier for trailing distance
+        "trailing_volatility_threshold": 0.8,  # High volatility threshold for crypto
+        "trailing_trend_strength_min": 0.7  # Minimum trend strength for trailing
     }
 }
 
@@ -13302,54 +13332,103 @@ class MasterAgent:
             }
     
     def _calculate_optimal_trailing_distance(self, symbol, current_price, market_intelligence, profit_pct):
-        """Calculate optimal trailing stop distance based on market conditions"""
+        """Enhanced trailing stop distance calculation using symbol-specific configuration and market intelligence"""
         try:
+            # Get symbol-specific configuration
+            symbol_config = ENTRY_TP_SL_CONFIG.get(symbol, {})
+            
+            # Get technical analysis data
             technical = market_intelligence.get('technical', {})
             atr_pct = technical.get('atr_pct', 0.01)
             volatility_level = self._assess_volatility_level(market_intelligence)
             
-            # Base distance as percentage of current price
-            base_distance_pct = atr_pct * 2  # 2x ATR as base
+            # Use symbol-specific ATR multiplier for trailing
+            trailing_atr_multiplier = symbol_config.get('trailing_atr_multiplier', 2.0)
+            base_distance_pct = atr_pct * trailing_atr_multiplier
             
-            # Adjust based on volatility
-            if volatility_level > 0.8:
-                volatility_multiplier = 1.5  # Wider trailing for high volatility
-            elif volatility_level > 0.5:
+            print(f"🎯 [Master Agent] Enhanced trailing distance calculation for {symbol}:")
+            print(f"   Symbol ATR multiplier: {trailing_atr_multiplier}")
+            print(f"   Base ATR: {atr_pct:.4%}")
+            print(f"   Base distance: {base_distance_pct:.4%}")
+            
+            # Enhanced volatility adjustment based on symbol configuration
+            volatility_threshold = symbol_config.get('trailing_volatility_threshold', 0.6)
+            if volatility_level > volatility_threshold:
+                if symbol.startswith(('BTC', 'ETH')):  # Crypto - more aggressive
+                    volatility_multiplier = 1.8
+                elif 'USD' in symbol and len(symbol) == 6:  # Forex
+                    volatility_multiplier = 1.3
+                else:  # Commodities/Indices
+                    volatility_multiplier = 1.5
+            elif volatility_level > (volatility_threshold * 0.7):
                 volatility_multiplier = 1.2
             else:
                 volatility_multiplier = 1.0
             
-            # Adjust based on profit level
-            if profit_pct > 0.05:  # >5% profit
-                profit_multiplier = 0.8  # Tighter trailing for large profits
-            elif profit_pct > 0.03:  # >3% profit
-                profit_multiplier = 0.9
-            else:
-                profit_multiplier = 1.0
+            print(f"   Volatility level: {volatility_level:.2f} (threshold: {volatility_threshold:.2f})")
+            print(f"   Volatility multiplier: {volatility_multiplier:.2f}")
             
-            # Calculate final distance
-            final_distance_pct = base_distance_pct * volatility_multiplier * profit_multiplier
+            # Dynamic profit-based adjustment
+            if profit_pct > 0.08:  # >8% profit - very tight trailing
+                profit_multiplier = 0.7
+            elif profit_pct > 0.05:  # >5% profit - tight trailing
+                profit_multiplier = 0.8
+            elif profit_pct > 0.03:  # >3% profit - moderate trailing
+                profit_multiplier = 0.9
+            elif profit_pct > 0.02:  # >2% profit - standard trailing
+                profit_multiplier = 1.0
+            else:  # <2% profit - wider trailing for safety
+                profit_multiplier = 1.1
+            
+            print(f"   Current profit: {profit_pct:.2%}")
+            print(f"   Profit multiplier: {profit_multiplier:.2f}")
+            
+            # Market condition adjustment
+            trend_strength = self._assess_trend_strength(market_intelligence)
+            if trend_strength > 0.8:  # Very strong trend - can use tighter trailing
+                trend_multiplier = 0.9
+            elif trend_strength > 0.6:  # Strong trend
+                trend_multiplier = 1.0
+            else:  # Weak trend - wider trailing for safety
+                trend_multiplier = 1.2
+            
+            print(f"   Trend strength: {trend_strength:.2f}")
+            print(f"   Trend multiplier: {trend_multiplier:.2f}")
+            
+            # Calculate final distance with all multipliers
+            final_distance_pct = base_distance_pct * volatility_multiplier * profit_multiplier * trend_multiplier
+            
+            # Symbol-specific bounds
+            if symbol.startswith(('BTC', 'ETH')):  # Crypto - wider bounds
+                min_distance_pct = 0.008  # 0.8% minimum
+                max_distance_pct = 0.05   # 5% maximum
+            elif 'USD' in symbol and len(symbol) == 6:  # Forex - tighter bounds
+                min_distance_pct = 0.003  # 0.3% minimum
+                max_distance_pct = 0.02   # 2% maximum
+            else:  # Commodities/Indices - standard bounds
+                min_distance_pct = 0.005  # 0.5% minimum
+                max_distance_pct = 0.03   # 3% maximum
             
             # Apply bounds
-            min_distance_pct = 0.005  # 0.5% minimum
-            max_distance_pct = 0.03   # 3% maximum
-            
             final_distance_pct = max(min_distance_pct, min(final_distance_pct, max_distance_pct))
             
             # Convert to price distance
             trailing_distance = current_price * final_distance_pct
             
-            print(f"🎯 [Master Agent] Trailing distance calculation:")
-            print(f"   Base (2xATR): {base_distance_pct:.3%}")
-            print(f"   Volatility multiplier: {volatility_multiplier:.2f}")
-            print(f"   Profit multiplier: {profit_multiplier:.2f}")
-            print(f"   Final distance: {final_distance_pct:.3%} ({trailing_distance:.5f})")
+            print(f"   Final calculation:")
+            print(f"   - Combined multipliers: {volatility_multiplier * profit_multiplier * trend_multiplier:.2f}")
+            print(f"   - Final distance %: {final_distance_pct:.4%}")
+            print(f"   - Trailing distance: {trailing_distance:.5f}")
+            print(f"   - Bounds: {min_distance_pct:.3%} - {max_distance_pct:.3%}")
             
             return trailing_distance
             
         except Exception as e:
-            print(f"❌ [Master Agent] Error calculating trailing distance: {e}")
-            return current_price * 0.01  # 1% fallback
+            print(f"❌ [Master Agent] Error calculating enhanced trailing distance for {symbol}: {e}")
+            # Fallback with symbol-specific default
+            symbol_config = ENTRY_TP_SL_CONFIG.get(symbol, {})
+            fallback_multiplier = symbol_config.get('trailing_atr_multiplier', 2.0)
+            return current_price * (fallback_multiplier * 0.005)  # Conservative fallback
     
     # === PERFORMANCE TRACKING AND LEARNING ===
     
@@ -19098,120 +19177,524 @@ class EnhancedTradingBot:
             }
     
     def _apply_master_agent_trailing_stops(self):
-        """Apply Master Agent trailing stop logic to open positions - ONLY SYSTEM FOR TRAILING STOPS"""
+        """🎯 Master Agent Trailing Stop System - Automatically monitors and activates trailing stops for ALL symbols"""
         try:
             if not self.open_positions:
                 return
             
-            print("🎯 [Master Agent Integration] Checking trailing stops for open positions...")
-            print(f"   [Master Agent] Processing {len(self.open_positions)} open positions with MASTER AGENT ONLY")
+            print("🎯 [Master Agent Trailing Stop] Analyzing ALL open positions for trailing stop opportunities...")
+            print(f"   📊 Processing {len(self.open_positions)} open positions with ENHANCED Master Agent system")
+            
+            trailing_activations = []
             
             for symbol, position in self.open_positions.items():
                 try:
+                    # Skip if already has trailing stop active
+                    if position.get('trailing_stop', False):
+                        continue
+                    
                     # Get current market data
                     current_data = self.data_manager.fetch_multi_timeframe_data(symbol, count=100)
                     if not current_data:
+                        print(f"⚠️ [Master Agent] No market data for {symbol}")
                         continue
                     
                     primary_tf = PRIMARY_TIMEFRAME_BY_SYMBOL.get(symbol, PRIMARY_TIMEFRAME)
                     df = current_data.get(primary_tf)
                     if df is None or df.empty:
+                        print(f"⚠️ [Master Agent] Empty data for {symbol} on {primary_tf}")
                         continue
                     
                     current_price = df['close'].iloc[-1]
                     entry_price = position.get('entry_price', current_price)
                     direction = position.get('signal', 'BUY')
                     
-                    # Prepare market data for Master Agent
-                    market_data = {'price_data': df}
+                    # Calculate current profit for quick check
+                    if direction.upper() == 'BUY':
+                        profit_pct = (current_price - entry_price) / entry_price
+                    else:
+                        profit_pct = (entry_price - current_price) / entry_price
                     
-                    # Get trailing stop decision from Master Agent
-                    trailing_decision = self._get_master_agent_trailing_decision(
-                        symbol, current_price, entry_price, direction, market_data
+                    print(f"📈 [Master Agent] {symbol}: Current profit {profit_pct:.2%} ({'✅ Above threshold' if profit_pct > 0.015 else '⏳ Below threshold'})")
+                    
+                    # Prepare comprehensive market data for Master Agent
+                    market_data = {
+                        'price_data': df,
+                        'symbol': symbol,
+                        'timeframe': primary_tf,
+                        'multi_tf_data': current_data
+                    }
+                    
+                    # Get comprehensive trailing stop decision from Master Agent
+                    trailing_decision = self._get_enhanced_master_agent_trailing_decision(
+                        symbol, current_price, entry_price, direction, market_data, position
                     )
                     
-                    # Apply trailing stop if recommended
+                    # Apply trailing stop if recommended by Master Agent
                     if trailing_decision['should_activate']:
-                        print(f"✅ [Master Agent] Activating trailing stop for {symbol}")
-                        print(f"   Current Price: {current_price:.5f}")
-                        print(f"   Profit: {trailing_decision['current_profit_pct']:.2%}")
-                        print(f"   Trailing Distance: {trailing_decision['recommended_distance']:.5f}")
-                        
-                        # Calculate TP progress for console display
-                        tp_target_console = position.get('tp', 0)
-                        tp_progress_console = 0
-                        if tp_target_console > 0:
-                            if direction.upper() == 'BUY':
-                                total_dist = tp_target_console - entry_price
-                                current_dist = current_price - entry_price
-                            else:
-                                total_dist = entry_price - tp_target_console
-                                current_dist = entry_price - current_price
-                            if total_dist != 0:
-                                tp_progress_console = max(0, min(100, (current_dist / total_dist) * 100))
-                        print(f"   Progress to TP: {tp_progress_console:.1f}%")
-                        
-                        # Update position with trailing stop
-                        position['trailing_stop'] = True
-                        position['trailing_distance'] = trailing_decision['recommended_distance']
-                        position['trailing_stop_price'] = self._calculate_trailing_stop_price(
-                            current_price, direction, trailing_decision['recommended_distance']
+                        activation_info = self._activate_trailing_stop_for_position(
+                            symbol, position, current_price, entry_price, direction, trailing_decision
                         )
                         
-                        # Show SL range information in console after calculation
-                        original_sl_console = position.get('initial_sl', position.get('sl', 0))
-                        print(f"   SL Range: {original_sl_console:.5f} → {position['trailing_stop_price']:.5f}")
-                        
-                        # Save updated position
-                        save_open_positions(self.open_positions)
-                        
-                        # Calculate SL range information for notification
-                        original_sl = position.get('initial_sl', position.get('sl', 0))
-                        new_trailing_sl = position['trailing_stop_price']
-                        
-                        # Calculate progress towards Take Profit target
-                        tp_target = position.get('tp', 0)
-                        tp_progress_pct = 0
-                        
-                        if tp_target > 0:
-                            if direction.upper() == 'BUY':
-                                # For BUY: progress = (current_price - entry_price) / (tp_target - entry_price)
-                                total_distance_to_tp = tp_target - entry_price
-                                current_distance = current_price - entry_price
-                            else:  # SELL
-                                # For SELL: progress = (entry_price - current_price) / (entry_price - tp_target)
-                                total_distance_to_tp = entry_price - tp_target
-                                current_distance = entry_price - current_price
-                            
-                            if total_distance_to_tp != 0:
-                                tp_progress_pct = (current_distance / total_distance_to_tp) * 100
-                                tp_progress_pct = max(0, min(100, tp_progress_pct))  # Clamp between 0-100%
-                        
-                        # Format SL values appropriately based on symbol (remove decimals for crypto like BTC)
-                        if symbol.startswith('BTC') or symbol.startswith('ETH') or 'USD' in symbol:
-                            original_sl_formatted = f"{original_sl:.0f}"
-                            new_trailing_sl_formatted = f"{new_trailing_sl:.0f}"
+                        if activation_info:
+                            trailing_activations.append(activation_info)
+                            print(f"✅ [Master Agent] Trailing stop ACTIVATED for {symbol}")
                         else:
-                            original_sl_formatted = f"{original_sl:.5f}"
-                            new_trailing_sl_formatted = f"{new_trailing_sl:.5f}"
-                        
-                        # Send notification
-                        self.send_discord_alert(
-                            f"🎯 **Master Agent Trailing Stop Activated**\n\n"
-                            f"**Symbol:** {symbol}\n"
-                            f"**Direction:** {direction}\n"
-                            f"**Current Profit:** {trailing_decision['current_profit_pct']:.2%} ({tp_progress_pct:.1f}% to TP)\n"
-                            f"**Trailing Distance:** {trailing_decision['recommended_distance']:.5f}\n"
-                            f"**SL Range:** {original_sl_formatted} → {new_trailing_sl_formatted}\n"
-                            f"**Reasons:** {', '.join(trailing_decision['reasons'])}"
-                        )
+                            print(f"❌ [Master Agent] Failed to activate trailing stop for {symbol}")
+                    else:
+                        print(f"⏳ [Master Agent] Trailing stop NOT activated for {symbol}: {', '.join(trailing_decision['reasons'])}")
                     
                 except Exception as e:
-                    print(f"❌ [Master Agent] Error processing trailing stop for {symbol}: {e}")
+                    print(f"❌ [Master Agent] Error processing {symbol}: {e}")
                     continue
             
+            # Send summary notification if any trailing stops were activated
+            if trailing_activations:
+                self._send_trailing_stop_summary_notification(trailing_activations)
+                self._log_trailing_stop_activations(trailing_activations)
+                print(f"🎯 [Master Agent] Successfully activated {len(trailing_activations)} trailing stops")
+            else:
+                print("⏳ [Master Agent] No trailing stops activated in this cycle")
+                self._log_trailing_stop_analysis_summary()
+            
         except Exception as e:
-            print(f"❌ [Master Agent Integration] Error in trailing stop application: {e}")
+            print(f"❌ [Master Agent Integration] Critical error in trailing stop system: {e}")
+            logging.error(f"Master Agent trailing stop system error: {e}")
+
+    def _get_enhanced_master_agent_trailing_decision(self, symbol, current_price, entry_price, direction, market_data, position):
+        """Enhanced Master Agent decision system for trailing stops with comprehensive analysis"""
+        try:
+            print(f"🧠 [Master Agent] Deep analysis for {symbol} trailing stop decision...")
+            
+            # Use the existing Master Agent decision system
+            base_decision = self._get_master_agent_trailing_decision(
+                symbol, current_price, entry_price, direction, market_data
+            )
+            
+            # Enhanced factors specific to this implementation
+            enhanced_factors = self._calculate_enhanced_trailing_factors(
+                symbol, current_price, entry_price, direction, market_data, position
+            )
+            
+            # Combine decisions with enhanced logic
+            final_decision = self._combine_trailing_decisions(base_decision, enhanced_factors, symbol)
+            
+            return final_decision
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error in enhanced trailing decision for {symbol}: {e}")
+            return {
+                'should_activate': False,
+                'reasons': ['Analysis error'],
+                'current_profit_pct': 0,
+                'recommended_distance': current_price * 0.01,
+                'confidence': 0.1
+            }
+
+    def _calculate_enhanced_trailing_factors(self, symbol, current_price, entry_price, direction, market_data, position):
+        """Calculate additional factors for trailing stop decision"""
+        try:
+            df = market_data.get('price_data')
+            factors = {}
+            
+            # 1. Position age factor (older positions more likely to trail)
+            entry_time = position.get('entry_time', datetime.now())
+            if isinstance(entry_time, str):
+                entry_time = datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+            position_age_hours = (datetime.now() - entry_time).total_seconds() / 3600
+            factors['position_age_score'] = min(1.0, position_age_hours / 24)  # Max score after 24 hours
+            
+            # 2. Volatility adaptation
+            atr = df['close'].rolling(14).apply(lambda x: np.mean(np.abs(np.diff(x)))).iloc[-1]
+            atr_pct = (atr / current_price) * 100
+            factors['volatility_adapted'] = atr_pct > 0.5  # Higher volatility = more suitable for trailing
+            
+            # 3. Trend consistency
+            sma_20 = df['close'].rolling(20).mean().iloc[-1]
+            sma_50 = df['close'].rolling(50).mean().iloc[-1] if len(df) >= 50 else sma_20
+            trend_alignment = (current_price > sma_20 > sma_50) if direction.upper() == 'BUY' else (current_price < sma_20 < sma_50)
+            factors['trend_consistency'] = trend_alignment
+            
+            # 4. Recent momentum
+            recent_returns = df['close'].pct_change().tail(5).mean()
+            momentum_favorable = (recent_returns > 0) if direction.upper() == 'BUY' else (recent_returns < 0)
+            factors['momentum_favorable'] = momentum_favorable
+            
+            # 5. Symbol-specific thresholds
+            symbol_config = ENTRY_TP_SL_CONFIG.get(symbol, {})
+            min_profit_threshold = symbol_config.get('min_trailing_profit', 0.015)  # Default 1.5%
+            
+            if direction.upper() == 'BUY':
+                current_profit_pct = (current_price - entry_price) / entry_price
+            else:
+                current_profit_pct = (entry_price - current_price) / entry_price
+                
+            factors['meets_symbol_threshold'] = current_profit_pct >= min_profit_threshold
+            factors['current_profit_pct'] = current_profit_pct
+            
+            return factors
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error calculating enhanced factors for {symbol}: {e}")
+            return {'error': str(e)}
+
+    def _combine_trailing_decisions(self, base_decision, enhanced_factors, symbol):
+        """Combine base Master Agent decision with enhanced factors"""
+        try:
+            # Start with base decision
+            should_activate = base_decision.get('should_activate', False)
+            reasons = list(base_decision.get('reasons', []))
+            confidence = base_decision.get('confidence', 0.5)
+            
+            # Apply enhanced factors
+            if enhanced_factors.get('error'):
+                return base_decision
+            
+            enhancement_score = 0
+            max_enhancements = 5
+            
+            # Factor 1: Position age
+            if enhanced_factors.get('position_age_score', 0) > 0.3:
+                enhancement_score += 1
+                reasons.append("Position matured for trailing")
+            
+            # Factor 2: Volatility
+            if enhanced_factors.get('volatility_adapted', False):
+                enhancement_score += 1
+                reasons.append("Volatility favorable for trailing")
+            
+            # Factor 3: Trend consistency
+            if enhanced_factors.get('trend_consistency', False):
+                enhancement_score += 1
+                reasons.append("Strong trend alignment")
+            
+            # Factor 4: Momentum
+            if enhanced_factors.get('momentum_favorable', False):
+                enhancement_score += 1
+                reasons.append("Recent momentum supports direction")
+            
+            # Factor 5: Symbol threshold
+            if enhanced_factors.get('meets_symbol_threshold', False):
+                enhancement_score += 1
+                reasons.append("Meets symbol-specific profit threshold")
+            
+            # Enhanced decision logic
+            enhancement_ratio = enhancement_score / max_enhancements
+            
+            # If base decision was positive, enhance confidence
+            if should_activate and enhancement_ratio >= 0.4:
+                confidence = min(0.95, confidence + (enhancement_ratio * 0.2))
+                reasons.append("Enhanced confidence via multiple factors")
+            
+            # If base decision was negative but enhancements are strong, override
+            elif not should_activate and enhancement_ratio >= 0.6 and enhanced_factors.get('meets_symbol_threshold', False):
+                should_activate = True
+                confidence = 0.7
+                reasons = ["Override: Strong enhancement factors"] + reasons[-3:]  # Keep last 3 reasons
+            
+            return {
+                'should_activate': should_activate,
+                'reasons': reasons,
+                'current_profit_pct': enhanced_factors.get('current_profit_pct', 0),
+                'recommended_distance': base_decision.get('recommended_distance', 0),
+                'confidence': confidence,
+                'enhancement_score': enhancement_score,
+                'enhancement_ratio': enhancement_ratio
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error combining decisions for {symbol}: {e}")
+            return base_decision
+
+    def _activate_trailing_stop_for_position(self, symbol, position, current_price, entry_price, direction, trailing_decision):
+        """Activate trailing stop for a specific position with comprehensive tracking"""
+        try:
+            print(f"🎯 [Master Agent] Activating trailing stop for {symbol}...")
+            
+            # Calculate TP progress for display
+            tp_target = position.get('tp', 0)
+            tp_progress_pct = 0
+            
+            if tp_target > 0:
+                if direction.upper() == 'BUY':
+                    total_distance_to_tp = tp_target - entry_price
+                    current_distance = current_price - entry_price
+                else:
+                    total_distance_to_tp = entry_price - tp_target
+                    current_distance = entry_price - current_price
+                
+                if total_distance_to_tp != 0:
+                    tp_progress_pct = max(0, min(100, (current_distance / total_distance_to_tp) * 100))
+            
+            # Update position with trailing stop information
+            position['trailing_stop'] = True
+            position['trailing_distance'] = trailing_decision['recommended_distance']
+            position['trailing_stop_price'] = self._calculate_trailing_stop_price(
+                current_price, direction, trailing_decision['recommended_distance']
+            )
+            position['trailing_activated_at'] = datetime.now().isoformat()
+            position['trailing_activation_price'] = current_price
+            position['trailing_confidence'] = trailing_decision.get('confidence', 0.5)
+            
+            # Store original SL for comparison
+            original_sl = position.get('initial_sl', position.get('sl', 0))
+            if not position.get('initial_sl'):
+                position['initial_sl'] = original_sl
+            
+            # Update the actual stop loss to the trailing stop price
+            position['sl'] = position['trailing_stop_price']
+            
+            # Save updated positions
+            save_open_positions(self.open_positions)
+            
+            # Format values for display
+            if symbol.startswith('BTC') or symbol.startswith('ETH') or 'USD' in symbol:
+                original_sl_formatted = f"{original_sl:.0f}"
+                new_trailing_sl_formatted = f"{position['trailing_stop_price']:.0f}"
+                trailing_distance_formatted = f"{trailing_decision['recommended_distance']:.0f}"
+            else:
+                original_sl_formatted = f"{original_sl:.5f}"
+                new_trailing_sl_formatted = f"{position['trailing_stop_price']:.5f}"
+                trailing_distance_formatted = f"{trailing_decision['recommended_distance']:.5f}"
+            
+            # Console output
+            print(f"   💰 Current Price: {current_price:.5f}")
+            print(f"   📈 Profit: {trailing_decision['current_profit_pct']:.2%} ({tp_progress_pct:.1f}% to TP)")
+            print(f"   📏 Trailing Distance: {trailing_distance_formatted}")
+            print(f"   🎯 SL Range: {original_sl_formatted} → {new_trailing_sl_formatted}")
+            print(f"   🔍 Confidence: {trailing_decision.get('confidence', 0.5):.1%}")
+            print(f"   ✅ Reasons: {', '.join(trailing_decision['reasons'])}")
+            
+            # Return activation info for summary
+            return {
+                'symbol': symbol,
+                'direction': direction,
+                'current_profit_pct': trailing_decision['current_profit_pct'],
+                'tp_progress_pct': tp_progress_pct,
+                'trailing_distance': trailing_decision['recommended_distance'],
+                'sl_range': f"{original_sl_formatted} → {new_trailing_sl_formatted}",
+                'reasons': trailing_decision['reasons'],
+                'confidence': trailing_decision.get('confidence', 0.5),
+                'current_price': current_price
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error activating trailing stop for {symbol}: {e}")
+            return None
+
+    def _send_trailing_stop_summary_notification(self, activations):
+        """Send comprehensive summary of all trailing stop activations"""
+        try:
+            if not activations:
+                return
+            
+            # Create detailed summary message
+            message = f"🎯 **Master Agent Trailing Stop Activated**\n\n"
+            message += f"📊 **Activated {len(activations)} trailing stop{'s' if len(activations) > 1 else ''}:**\n\n"
+            
+            for i, activation in enumerate(activations, 1):
+                message += f"**{i}. {activation['symbol']}**\n"
+                message += f"**Direction:** {activation['direction']}\n"
+                message += f"**Current Profit:** {activation['current_profit_pct']:.2%} ({activation['tp_progress_pct']:.1f}% to TP)\n"
+                message += f"**Trailing Distance:** {activation['trailing_distance']:.5f}\n"
+                message += f"**SL Range:** {activation['sl_range']}\n"
+                message += f"**Confidence:** {activation['confidence']:.1%}\n"
+                message += f"**Reasons:** {', '.join(activation['reasons'][:2])}\n\n"  # Show top 2 reasons
+            
+            # Add summary statistics
+            avg_profit = sum(a['current_profit_pct'] for a in activations) / len(activations)
+            avg_confidence = sum(a['confidence'] for a in activations) / len(activations)
+            
+            message += f"📈 **Summary:**\n"
+            message += f"Average Profit: {avg_profit:.2%}\n"
+            message += f"Average Confidence: {avg_confidence:.1%}\n"
+            message += f"🤖 Master Agent System Active"
+            
+            # Send the notification
+            self.send_discord_alert(message)
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error sending summary notification: {e}")
+            # Send individual notifications as fallback
+            for activation in activations:
+                try:
+                    self.send_discord_alert(
+                        f"🎯 **Master Agent Trailing Stop Activated**\n\n"
+                        f"**Symbol:** {activation['symbol']}\n"
+                        f"**Direction:** {activation['direction']}\n"
+                        f"**Current Profit:** {activation['current_profit_pct']:.2%} ({activation['tp_progress_pct']:.1f}% to TP)\n"
+                        f"**Trailing Distance:** {activation['trailing_distance']:.5f}\n"
+                        f"**SL Range:** {activation['sl_range']}\n"
+                        f"**Reasons:** {', '.join(activation['reasons'][:3])}"
+                    )
+                except:
+                    continue
+
+    def _log_trailing_stop_activations(self, activations):
+        """Log comprehensive trailing stop activation details"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Log to main log file
+            logging.info(f"🎯 [Master Agent Trailing] {len(activations)} trailing stops activated at {timestamp}")
+            
+            for activation in activations:
+                logging.info(
+                    f"   {activation['symbol']}: {activation['direction']} | "
+                    f"Profit: {activation['current_profit_pct']:.2%} | "
+                    f"Distance: {activation['trailing_distance']:.5f} | "
+                    f"SL: {activation['sl_range']} | "
+                    f"Confidence: {activation['confidence']:.1%}"
+                )
+            
+            # Create detailed log entry for analysis
+            log_entry = {
+                'timestamp': timestamp,
+                'event_type': 'trailing_stop_activation',
+                'activations': activations,
+                'total_count': len(activations),
+                'avg_profit': sum(a['current_profit_pct'] for a in activations) / len(activations),
+                'avg_confidence': sum(a['confidence'] for a in activations) / len(activations)
+            }
+            
+            # Store in memory for performance tracking
+            if not hasattr(self, 'trailing_stop_history'):
+                self.trailing_stop_history = []
+            
+            self.trailing_stop_history.append(log_entry)
+            
+            # Keep only last 100 entries to manage memory
+            if len(self.trailing_stop_history) > 100:
+                self.trailing_stop_history = self.trailing_stop_history[-100:]
+                
+            print(f"📝 [Master Agent] Logged {len(activations)} trailing stop activations")
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error logging trailing stop activations: {e}")
+
+    def _log_trailing_stop_analysis_summary(self):
+        """Log summary when no trailing stops are activated"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            if not self.open_positions:
+                logging.info(f"⏳ [Master Agent Trailing] No open positions to analyze at {timestamp}")
+                return
+            
+            # Analyze why no trailing stops were activated
+            analysis_summary = {
+                'total_positions': len(self.open_positions),
+                'positions_with_trailing': sum(1 for pos in self.open_positions.values() if pos.get('trailing_stop', False)),
+                'positions_analyzed': 0,
+                'profit_threshold_failures': 0
+            }
+            
+            for symbol, position in self.open_positions.items():
+                if position.get('trailing_stop', False):
+                    continue  # Skip positions that already have trailing
+                    
+                analysis_summary['positions_analyzed'] += 1
+                
+                # Quick analysis of why trailing wasn't activated
+                entry_price = position.get('entry_price', 0)
+                direction = position.get('signal', 'BUY')
+                
+                if entry_price > 0:
+                    # Simulate current price check (simplified)
+                    try:
+                        current_data = self.data_manager.fetch_multi_timeframe_data(symbol, count=5)
+                        if current_data:
+                            primary_tf = PRIMARY_TIMEFRAME_BY_SYMBOL.get(symbol, PRIMARY_TIMEFRAME)
+                            df = current_data.get(primary_tf)
+                            if df is not None and not df.empty:
+                                current_price = df['close'].iloc[-1]
+                                
+                                if direction.upper() == 'BUY':
+                                    profit_pct = (current_price - entry_price) / entry_price
+                                else:
+                                    profit_pct = (entry_price - current_price) / entry_price
+                                
+                                symbol_config = ENTRY_TP_SL_CONFIG.get(symbol, {})
+                                min_profit_threshold = symbol_config.get('min_trailing_profit', 0.015)
+                                
+                                if profit_pct < min_profit_threshold:
+                                    analysis_summary['profit_threshold_failures'] += 1
+                    except:
+                        pass
+            
+            logging.info(
+                f"⏳ [Master Agent Trailing] Analysis summary at {timestamp}: "
+                f"{analysis_summary['positions_analyzed']} positions analyzed, "
+                f"{analysis_summary['profit_threshold_failures']} below profit threshold, "
+                f"{analysis_summary['positions_with_trailing']} already have trailing"
+            )
+            
+            print(f"📊 [Master Agent] Analysis complete: {analysis_summary['positions_analyzed']} positions checked")
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error logging analysis summary: {e}")
+
+    def get_trailing_stop_performance_stats(self):
+        """Get comprehensive trailing stop performance statistics"""
+        try:
+            if not hasattr(self, 'trailing_stop_history') or not self.trailing_stop_history:
+                return {
+                    'total_activations': 0,
+                    'avg_profit_at_activation': 0,
+                    'avg_confidence': 0,
+                    'symbols_analysis': {},
+                    'recent_activity': 'No trailing stop history available'
+                }
+            
+            # Calculate comprehensive statistics
+            total_activations = sum(entry['total_count'] for entry in self.trailing_stop_history)
+            
+            all_activations = []
+            for entry in self.trailing_stop_history:
+                all_activations.extend(entry['activations'])
+            
+            if not all_activations:
+                return {'total_activations': 0, 'message': 'No activation data available'}
+            
+            # Symbol-wise analysis
+            symbol_stats = {}
+            for activation in all_activations:
+                symbol = activation['symbol']
+                if symbol not in symbol_stats:
+                    symbol_stats[symbol] = {
+                        'count': 0,
+                        'avg_profit': 0,
+                        'avg_confidence': 0,
+                        'profits': [],
+                        'confidences': []
+                    }
+                
+                symbol_stats[symbol]['count'] += 1
+                symbol_stats[symbol]['profits'].append(activation['current_profit_pct'])
+                symbol_stats[symbol]['confidences'].append(activation['confidence'])
+            
+            # Calculate averages for each symbol
+            for symbol, stats in symbol_stats.items():
+                stats['avg_profit'] = sum(stats['profits']) / len(stats['profits'])
+                stats['avg_confidence'] = sum(stats['confidences']) / len(stats['confidences'])
+                del stats['profits']  # Clean up raw data
+                del stats['confidences']
+            
+            recent_entry = self.trailing_stop_history[-1] if self.trailing_stop_history else None
+            
+            return {
+                'total_activations': total_activations,
+                'total_sessions': len(self.trailing_stop_history),
+                'avg_profit_at_activation': sum(a['current_profit_pct'] for a in all_activations) / len(all_activations),
+                'avg_confidence': sum(a['confidence'] for a in all_activations) / len(all_activations),
+                'symbols_analysis': symbol_stats,
+                'recent_activity': recent_entry['timestamp'] if recent_entry else 'No recent activity',
+                'most_active_symbol': max(symbol_stats.keys(), key=lambda x: symbol_stats[x]['count']) if symbol_stats else 'None'
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent] Error getting performance stats: {e}")
+            return {'error': str(e)}
     
     def _calculate_trailing_stop_price(self, current_price, direction, trailing_distance):
         """Calculate trailing stop price based on direction and distance"""
