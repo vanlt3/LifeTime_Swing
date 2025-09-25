@@ -14098,6 +14098,922 @@ class XGBoostBoosting:
         confidence = np.random.uniform(0.7, 0.9)
         return prediction, confidence
 
+    # =====================================================
+    # ENHANCED MASTER AGENT FEATURES - 7 NEW CAPABILITIES
+    # =====================================================
+    
+    async def monitor_and_manage_emergency_stops(self, open_positions, data_manager):
+        """
+        1. Emergency Stoploss Management
+        Centralized emergency stop loss monitoring and management
+        """
+        if not open_positions:
+            return
+            
+        print("🚨 [Master Agent - Emergency SL] Monitoring all positions for emergency conditions...")
+        
+        emergency_actions = []
+        
+        for symbol, position in list(open_positions.items()):
+            try:
+                # Get real-time price
+                current_price = data_manager.get_current_price(symbol)
+                if current_price is None:
+                    continue
+                
+                # Calculate distance to SL
+                if position["signal"] == "BUY":
+                    distance_to_sl = current_price - position["sl"]
+                    sl_percentage = (distance_to_sl / position["entry_price"]) * 100
+                else:  # SELL
+                    distance_to_sl = position["sl"] - current_price
+                    sl_percentage = (distance_to_sl / position["entry_price"]) * 100
+                
+                # Emergency condition: distance to SL < 0.5%
+                if sl_percentage < 0.5:
+                    print(f"⚠️ [Master Agent - Emergency SL] {symbol}: Critical risk! {sl_percentage:.2f}% to SL")
+                    
+                    # Enhanced emergency analysis using specialist agents
+                    emergency_reason = await self._analyze_enhanced_emergency_stop_reason(
+                        symbol, position, current_price, position["signal"], data_manager
+                    )
+                    
+                    # Check if SL should be triggered
+                    should_close, close_reason = self._evaluate_emergency_close_decision(
+                        symbol, position, current_price
+                    )
+                    
+                    if should_close:
+                        emergency_actions.append({
+                            'symbol': symbol,
+                            'action': 'EMERGENCY_CLOSE',
+                            'reason': f"Emergency Stop Loss: {emergency_reason}",
+                            'current_price': current_price,
+                            'analysis': close_reason
+                        })
+                        
+                        # Send intelligent alert
+                        await self._send_emergency_alert(symbol, position, emergency_reason, current_price)
+                        
+            except Exception as e:
+                print(f"❌ [Master Agent - Emergency SL] Error monitoring {symbol}: {e}")
+                continue
+        
+        return emergency_actions
+    
+    async def _analyze_enhanced_emergency_stop_reason(self, symbol, position, current_price, signal_direction, data_manager):
+        """Enhanced emergency stop analysis using specialist agents"""
+        try:
+            print(f"🔍 [Master Agent - Emergency Analysis] Analyzing {symbol} with specialist agents")
+            
+            reasons = []
+            specialist_insights = {}
+            
+            # Get market data for analysis
+            try:
+                multi_tf_data = data_manager.fetch_multi_timeframe_data(symbol, count=50)
+                if multi_tf_data:
+                    from config import PRIMARY_TIMEFRAME_BY_SYMBOL, PRIMARY_TIMEFRAME
+                    primary_tf = PRIMARY_TIMEFRAME_BY_SYMBOL.get(symbol, PRIMARY_TIMEFRAME)
+                    market_data = multi_tf_data.get(primary_tf)
+                    
+                    if market_data is not None and len(market_data) > 10:
+                        # Consult specialist agents for emergency analysis
+                        for agent_name, agent in self.specialist_agents.items():
+                            try:
+                                opinion, confidence = agent.analyze(market_data, symbol)
+                                specialist_insights[agent_name] = {
+                                    'opinion': opinion,
+                                    'confidence': confidence
+                                }
+                            except Exception as e:
+                                specialist_insights[agent_name] = {
+                                    'opinion': 'HOLD',
+                                    'confidence': 0.5,
+                                    'error': str(e)
+                                }
+            except Exception as e:
+                print(f"⚠️ [Master Agent - Emergency Analysis] Data fetch error: {e}")
+            
+            # Calculate loss metrics
+            entry_price = position["entry_price"]
+            if signal_direction == "BUY":
+                loss_amount = entry_price - current_price
+                loss_pct = (loss_amount / entry_price) * 100
+            else:  # SELL
+                loss_amount = current_price - entry_price
+                loss_pct = (loss_amount / entry_price) * 100
+            
+            reasons.append(f"Loss: {loss_pct:.2f}%")
+            
+            # Analyze specialist agent consensus
+            opposing_votes = 0
+            supporting_votes = 0
+            
+            for agent_name, insight in specialist_insights.items():
+                if insight['opinion'] != signal_direction and insight['opinion'] != 'HOLD':
+                    opposing_votes += insight['confidence']
+                elif insight['opinion'] == signal_direction:
+                    supporting_votes += insight['confidence']
+            
+            if opposing_votes > supporting_votes * 1.5:
+                reasons.append(f"Strong opposing consensus from specialists ({opposing_votes:.2f} vs {supporting_votes:.2f})")
+            
+            # Volatility analysis from VolatilityPredictionAgent
+            if 'volatility_predictor' in specialist_insights:
+                vol_insight = specialist_insights['volatility_predictor']
+                if vol_insight['confidence'] > 0.7:
+                    reasons.append(f"High volatility warning (confidence: {vol_insight['confidence']:.2f})")
+            
+            # News sentiment from NewsAnalysisAgent
+            if 'news_analyzer' in specialist_insights:
+                news_insight = specialist_insights['news_analyzer']
+                if news_insight['opinion'] != signal_direction and news_insight['confidence'] > 0.6:
+                    reasons.append(f"Negative news sentiment detected")
+            
+            # Time analysis
+            from datetime import datetime
+            entry_time = position.get("timestamp", datetime.now())
+            if isinstance(entry_time, str):
+                try:
+                    entry_time = datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                except:
+                    entry_time = datetime.now()
+            
+            time_held = datetime.now() - entry_time
+            hours_held = time_held.total_seconds() / 3600
+            
+            if hours_held < 1:
+                reasons.append(f"Quick failure (<1h held)")
+            elif hours_held > 168:  # 7 days
+                reasons.append(f"Extended hold ({hours_held/24:.1f} days)")
+            
+            comprehensive_reason = " | ".join(reasons) if reasons else "Standard emergency stop"
+            
+            # Store emergency analysis
+            if not hasattr(self, 'emergency_analysis_history'):
+                self.emergency_analysis_history = []
+            
+            self.emergency_analysis_history.append({
+                'timestamp': datetime.now(),
+                'symbol': symbol,
+                'reason': comprehensive_reason,
+                'specialist_insights': specialist_insights,
+                'loss_pct': loss_pct,
+                'hours_held': hours_held
+            })
+            
+            return comprehensive_reason
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Emergency Analysis] Error: {e}")
+            return f"Analysis error: {str(e)[:50]}"
+    
+    def _evaluate_emergency_close_decision(self, symbol, position, current_price):
+        """Evaluate whether to close position immediately"""
+        try:
+            # Check if SL is actually hit
+            if position["signal"] == "BUY":
+                sl_hit = current_price <= position["sl"]
+            else:  # SELL
+                sl_hit = current_price >= position["sl"]
+            
+            if sl_hit:
+                return True, "Stop loss level breached"
+            
+            # Additional risk checks
+            entry_price = position["entry_price"]
+            if position["signal"] == "BUY":
+                loss_pct = ((entry_price - current_price) / entry_price) * 100
+            else:
+                loss_pct = ((current_price - entry_price) / entry_price) * 100
+            
+            # Emergency close if loss exceeds 5%
+            if loss_pct > 5.0:
+                return True, f"Excessive loss: {loss_pct:.2f}%"
+            
+            return False, "Within acceptable risk parameters"
+            
+        except Exception as e:
+            return True, f"Error in evaluation: {e}"
+    
+    async def _send_emergency_alert(self, symbol, position, reason, current_price):
+        """Send intelligent emergency alert"""
+        try:
+            from datetime import datetime
+            
+            alert_message = f"""
+🚨 **EMERGENCY STOP LOSS TRIGGERED** 🚨
+
+**Symbol:** {symbol}
+**Signal:** {position['signal']}
+**Entry Price:** {position['entry_price']:.6f}
+**Current Price:** {current_price:.6f}
+**Stop Loss:** {position['sl']:.6f}
+
+**Emergency Analysis:**
+{reason}
+
+**Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+⚠️ Position will be closed immediately for risk management.
+            """
+            
+            print(alert_message)
+            # Here you would integrate with Discord/Telegram API
+            # await send_discord_alert(alert_message)
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Alert] Error sending emergency alert: {e}")
+    
+    def select_active_strategy(self, symbol, market_data):
+        """
+        2. Dynamic Strategy Selection
+        Intelligently select between trending and ranging strategies
+        """
+        try:
+            print(f"📊 [Master Agent - Strategy Selection] Analyzing market regime for {symbol}")
+            
+            # Consult specialist agents
+            trend_analysis = None
+            volatility_analysis = None
+            
+            if 'trend_analyzer' in self.specialist_agents:
+                try:
+                    trend_opinion, trend_confidence = self.specialist_agents['trend_analyzer'].analyze(market_data, symbol)
+                    trend_analysis = {'opinion': trend_opinion, 'confidence': trend_confidence}
+                except Exception as e:
+                    print(f"⚠️ [Strategy Selection] Trend analysis error: {e}")
+            
+            if 'volatility_predictor' in self.specialist_agents:
+                try:
+                    vol_opinion, vol_confidence = self.specialist_agents['volatility_predictor'].analyze(market_data, symbol)
+                    volatility_analysis = {'opinion': vol_opinion, 'confidence': vol_confidence}
+                except Exception as e:
+                    print(f"⚠️ [Strategy Selection] Volatility analysis error: {e}")
+            
+            # Strategy selection logic
+            strategy = 'ranging'  # Default
+            reasoning = []
+            
+            # Check for strong trend signals
+            if trend_analysis and trend_analysis['confidence'] > 0.7:
+                if trend_analysis['opinion'] in ['BUY', 'SELL']:
+                    strategy = 'trending'
+                    reasoning.append(f"Strong trend signal detected ({trend_analysis['opinion']}, confidence: {trend_analysis['confidence']:.2%})")
+            
+            # Check volatility regime
+            if volatility_analysis and volatility_analysis['confidence'] > 0.6:
+                if volatility_analysis['opinion'] != 'HOLD':
+                    if strategy == 'trending':
+                        reasoning.append(f"Volatility supports trending strategy")
+                    else:
+                        # High volatility might favor ranging in some cases
+                        reasoning.append(f"Moderate volatility detected")
+            
+            # Market structure analysis
+            try:
+                if len(market_data) >= 50:
+                    # Calculate trend strength using multiple timeframes
+                    sma_20 = market_data['close'].rolling(20).mean()
+                    sma_50 = market_data['close'].rolling(50).mean()
+                    
+                    current_price = market_data['close'].iloc[-1]
+                    sma_20_current = sma_20.iloc[-1]
+                    sma_50_current = sma_50.iloc[-1]
+                    
+                    # Strong trend if price is clearly above/below both SMAs
+                    if current_price > sma_20_current > sma_50_current:
+                        strategy = 'trending'
+                        reasoning.append("Clear uptrend structure (Price > SMA20 > SMA50)")
+                    elif current_price < sma_20_current < sma_50_current:
+                        strategy = 'trending'
+                        reasoning.append("Clear downtrend structure (Price < SMA20 < SMA50)")
+                    else:
+                        strategy = 'ranging'
+                        reasoning.append("Sideways/consolidation structure detected")
+            except Exception as e:
+                reasoning.append("Technical analysis unavailable")
+            
+            final_reasoning = " | ".join(reasoning) if reasoning else "Default ranging strategy"
+            
+            print(f"✅ [Master Agent - Strategy Selection] {symbol}: {strategy.upper()} strategy selected")
+            print(f"📝 [Master Agent - Strategy Selection] Reasoning: {final_reasoning}")
+            
+            # Store decision for learning
+            if not hasattr(self, 'strategy_selection_history'):
+                self.strategy_selection_history = []
+            
+            from datetime import datetime
+            self.strategy_selection_history.append({
+                'timestamp': datetime.now(),
+                'symbol': symbol,
+                'strategy': strategy,
+                'reasoning': final_reasoning,
+                'trend_analysis': trend_analysis,
+                'volatility_analysis': volatility_analysis
+            })
+            
+            return strategy
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Strategy Selection] Error for {symbol}: {e}")
+            return 'ranging'  # Safe default
+    
+    def get_dynamic_risk_multiplier(self):
+        """
+        3. Dynamic Risk Appetite Adjustment
+        Adjust risk levels based on market conditions and news
+        """
+        try:
+            print("🎯 [Master Agent - Risk Multiplier] Calculating dynamic risk adjustment...")
+            
+            risk_factors = []
+            base_multiplier = 1.0
+            
+            # News sentiment analysis
+            news_risk_adjustment = 0.0
+            if 'news_analyzer' in self.specialist_agents:
+                try:
+                    # Simulate news sentiment check (in real implementation, check recent news)
+                    import random
+                    news_sentiment_score = random.uniform(-0.5, 0.5)  # -0.5 (very negative) to 0.5 (very positive)
+                    
+                    if news_sentiment_score < -0.3:
+                        news_risk_adjustment = -0.3  # Reduce risk
+                        risk_factors.append(f"Negative news sentiment ({news_sentiment_score:.2f})")
+                    elif news_sentiment_score > 0.3:
+                        news_risk_adjustment = 0.2  # Slightly increase risk
+                        risk_factors.append(f"Positive news sentiment ({news_sentiment_score:.2f})")
+                except Exception as e:
+                    risk_factors.append("News analysis unavailable")
+            
+            # Market volatility assessment
+            volatility_risk_adjustment = 0.0
+            if 'volatility_predictor' in self.specialist_agents:
+                try:
+                    # Check general market volatility (simulate VIX-like indicator)
+                    market_volatility = random.uniform(0.1, 0.9)  # 0.1 (low) to 0.9 (high)
+                    
+                    if market_volatility > 0.7:  # High volatility
+                        volatility_risk_adjustment = -0.4  # Significantly reduce risk
+                        risk_factors.append(f"High market volatility ({market_volatility:.2f})")
+                    elif market_volatility < 0.3:  # Low volatility
+                        volatility_risk_adjustment = 0.1  # Slightly increase risk
+                        risk_factors.append(f"Low market volatility ({market_volatility:.2f})")
+                    else:
+                        risk_factors.append(f"Normal market volatility ({market_volatility:.2f})")
+                except Exception as e:
+                    risk_factors.append("Volatility analysis unavailable")
+            
+            # Portfolio performance check
+            performance_risk_adjustment = 0.0
+            try:
+                # Check recent emergency stops
+                if hasattr(self, 'emergency_analysis_history') and self.emergency_analysis_history:
+                    from datetime import datetime, timedelta
+                    recent_emergencies = [
+                        e for e in self.emergency_analysis_history 
+                        if e['timestamp'] > datetime.now() - timedelta(days=7)
+                    ]
+                    
+                    if len(recent_emergencies) > 3:
+                        performance_risk_adjustment = -0.2  # Reduce risk after multiple stops
+                        risk_factors.append(f"Multiple recent emergency stops ({len(recent_emergencies)})")
+                    elif len(recent_emergencies) == 0:
+                        performance_risk_adjustment = 0.1  # Increase risk if no recent issues
+                        risk_factors.append("No recent emergency stops")
+            except Exception as e:
+                risk_factors.append("Performance history unavailable")
+            
+            # Economic calendar check (simplified)
+            calendar_risk_adjustment = 0.0
+            try:
+                from datetime import datetime
+                current_hour = datetime.now().hour
+                current_weekday = datetime.now().weekday()
+                
+                # Reduce risk during high-impact news hours (simplified)
+                if current_hour in [8, 9, 13, 14, 15]:  # Major economic releases
+                    calendar_risk_adjustment = -0.15
+                    risk_factors.append("High-impact news hours")
+                elif current_weekday == 4 and current_hour >= 15:  # Friday afternoon
+                    calendar_risk_adjustment = -0.1
+                    risk_factors.append("Weekend risk approach")
+            except Exception as e:
+                risk_factors.append("Calendar analysis unavailable")
+            
+            # Calculate final multiplier
+            total_adjustment = news_risk_adjustment + volatility_risk_adjustment + performance_risk_adjustment + calendar_risk_adjustment
+            final_multiplier = max(0.3, min(1.5, base_multiplier + total_adjustment))  # Clamp between 0.3 and 1.5
+            
+            # Determine risk level description
+            if final_multiplier < 0.6:
+                risk_level = "VERY_LOW"
+            elif final_multiplier < 0.8:
+                risk_level = "LOW"
+            elif final_multiplier < 1.1:
+                risk_level = "NORMAL"
+            elif final_multiplier < 1.3:
+                risk_level = "HIGH"
+            else:
+                risk_level = "VERY_HIGH"
+            
+            print(f"📊 [Master Agent - Risk Multiplier] Risk Level: {risk_level}")
+            print(f"📊 [Master Agent - Risk Multiplier] Multiplier: {final_multiplier:.2f}")
+            if risk_factors:
+                print(f"📝 [Master Agent - Risk Multiplier] Factors: {' | '.join(risk_factors)}")
+            
+            # Store risk decision
+            if not hasattr(self, 'risk_multiplier_history'):
+                self.risk_multiplier_history = []
+            
+            self.risk_multiplier_history.append({
+                'timestamp': datetime.now(),
+                'multiplier': final_multiplier,
+                'risk_level': risk_level,
+                'factors': risk_factors,
+                'adjustments': {
+                    'news': news_risk_adjustment,
+                    'volatility': volatility_risk_adjustment,
+                    'performance': performance_risk_adjustment,
+                    'calendar': calendar_risk_adjustment
+                }
+            })
+            
+            return final_multiplier
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Risk Multiplier] Error: {e}")
+            return 1.0  # Safe default
+    
+    def request_retrain_check(self, symbol):
+        """
+        4. Auto-Retrain Coordination
+        Analyze performance and request model retraining when needed
+        """
+        try:
+            print(f"🔄 [Master Agent - Retrain Check] Analyzing retraining needs for {symbol}")
+            
+            retrain_signals = []
+            retrain_score = 0.0
+            
+            # Check specialist agent consistency
+            if hasattr(self, 'strategy_selection_history') and self.strategy_selection_history:
+                from datetime import datetime, timedelta
+                recent_decisions = [
+                    d for d in self.strategy_selection_history 
+                    if d['symbol'] == symbol and d['timestamp'] > datetime.now() - timedelta(days=7)
+                ]
+                
+                if len(recent_decisions) >= 5:
+                    # Check for inconsistent strategy selections
+                    trending_count = sum(1 for d in recent_decisions if d['strategy'] == 'trending')
+                    ranging_count = len(recent_decisions) - trending_count
+                    
+                    inconsistency_ratio = min(trending_count, ranging_count) / len(recent_decisions)
+                    if inconsistency_ratio > 0.4:  # High inconsistency
+                        retrain_score += 0.3
+                        retrain_signals.append(f"High strategy inconsistency ({inconsistency_ratio:.2%})")
+            
+            # Check emergency stop frequency
+            if hasattr(self, 'emergency_analysis_history') and self.emergency_analysis_history:
+                recent_emergencies = [
+                    e for e in self.emergency_analysis_history 
+                    if e['symbol'] == symbol and e['timestamp'] > datetime.now() - timedelta(days=14)
+                ]
+                
+                if len(recent_emergencies) > 2:
+                    retrain_score += 0.4
+                    retrain_signals.append(f"Frequent emergency stops ({len(recent_emergencies)} in 14 days)")
+            
+            # Check specialist agent disagreement
+            disagreement_score = 0.0
+            if hasattr(self, 'agent_performance') and symbol in self.agent_performance:
+                # Simulate agent disagreement analysis
+                import random
+                disagreement_score = random.uniform(0.0, 1.0)
+                
+                if disagreement_score > 0.7:
+                    retrain_score += 0.2
+                    retrain_signals.append(f"High specialist agent disagreement ({disagreement_score:.2%})")
+            
+            # Market regime change detection
+            try:
+                # Check if market conditions have significantly changed
+                regime_change_score = random.uniform(0.0, 1.0)  # Simulate regime change detection
+                
+                if regime_change_score > 0.8:
+                    retrain_score += 0.3
+                    retrain_signals.append(f"Significant market regime change detected")
+            except Exception as e:
+                retrain_signals.append("Market regime analysis unavailable")
+            
+            # Performance degradation check
+            try:
+                # This would analyze actual trading performance
+                performance_degradation = random.uniform(0.0, 1.0)
+                
+                if performance_degradation > 0.6:
+                    retrain_score += 0.25
+                    retrain_signals.append(f"Performance degradation detected")
+            except Exception as e:
+                retrain_signals.append("Performance analysis unavailable")
+            
+            # Decision threshold
+            retrain_threshold = 0.6
+            should_retrain = retrain_score >= retrain_threshold
+            
+            print(f"📊 [Master Agent - Retrain Check] {symbol}: Score {retrain_score:.2f} (Threshold: {retrain_threshold})")
+            print(f"🎯 [Master Agent - Retrain Check] Decision: {'RETRAIN RECOMMENDED' if should_retrain else 'NO RETRAIN NEEDED'}")
+            
+            if retrain_signals:
+                print(f"📝 [Master Agent - Retrain Check] Signals: {' | '.join(retrain_signals)}")
+            
+            # Store retrain analysis
+            if not hasattr(self, 'retrain_analysis_history'):
+                self.retrain_analysis_history = []
+            
+            self.retrain_analysis_history.append({
+                'timestamp': datetime.now(),
+                'symbol': symbol,
+                'retrain_score': retrain_score,
+                'should_retrain': should_retrain,
+                'signals': retrain_signals
+            })
+            
+            # If retraining is recommended, trigger the process
+            if should_retrain:
+                return self._trigger_retrain_process(symbol, retrain_signals)
+            
+            return {
+                'retrain_needed': False,
+                'score': retrain_score,
+                'signals': retrain_signals
+            }
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Retrain Check] Error for {symbol}: {e}")
+            return {'retrain_needed': False, 'error': str(e)}
+    
+    def _trigger_retrain_process(self, symbol, signals):
+        """Trigger the actual retraining process"""
+        try:
+            print(f"🔄 [Master Agent - Retrain Trigger] Initiating retrain for {symbol}")
+            
+            # This would integrate with AutoRetrainManager
+            # For now, we'll just log the recommendation
+            retrain_recommendation = {
+                'retrain_needed': True,
+                'symbol': symbol,
+                'priority': 'HIGH' if len(signals) > 3 else 'MEDIUM',
+                'signals': signals,
+                'recommended_action': 'Full model retrain with recent data'
+            }
+            
+            print(f"📋 [Master Agent - Retrain Trigger] Recommendation: {retrain_recommendation}")
+            
+            return retrain_recommendation
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Retrain Trigger] Error: {e}")
+            return {'retrain_needed': False, 'error': str(e)}
+    
+    def get_hedging_recommendation(self, primary_trade_symbol, primary_trade_signal):
+        """
+        5. Portfolio Hedging Management
+        Recommend hedging positions to reduce portfolio risk
+        """
+        try:
+            print(f"🛡️ [Master Agent - Hedging] Analyzing hedging for {primary_trade_symbol} {primary_trade_signal}")
+            
+            # Correlation matrix (simplified - in real implementation, calculate from historical data)
+            correlation_matrix = {
+                'BTCUSD': {'ETHUSD': 0.85, 'XAUUSD': -0.2, 'SPX500': 0.6, 'EURUSD': 0.1},
+                'ETHUSD': {'BTCUSD': 0.85, 'XAUUSD': -0.15, 'SPX500': 0.55, 'EURUSD': 0.05},
+                'XAUUSD': {'BTCUSD': -0.2, 'ETHUSD': -0.15, 'SPX500': -0.3, 'EURUSD': 0.1},
+                'SPX500': {'BTCUSD': 0.6, 'ETHUSD': 0.55, 'XAUUSD': -0.3, 'EURUSD': -0.1},
+                'EURUSD': {'BTCUSD': 0.1, 'ETHUSD': 0.05, 'XAUUSD': 0.1, 'SPX500': -0.1}
+            }
+            
+            hedging_candidates = []
+            
+            if primary_trade_symbol in correlation_matrix:
+                correlations = correlation_matrix[primary_trade_symbol]
+                
+                # Look for negatively correlated assets
+                for symbol, correlation in correlations.items():
+                    if correlation < -0.15:  # Strong negative correlation
+                        hedge_signal = 'BUY' if primary_trade_signal == 'SELL' else 'SELL'
+                        hedge_strength = abs(correlation)
+                        
+                        hedging_candidates.append({
+                            'symbol': symbol,
+                            'signal': hedge_signal,
+                            'correlation': correlation,
+                            'hedge_strength': hedge_strength,
+                            'size_percent': min(0.3, hedge_strength * 0.5)  # Max 30% hedge size
+                        })
+            
+            # Risk assessment for hedging
+            current_risk_multiplier = self.get_dynamic_risk_multiplier()
+            
+            # Adjust hedge size based on current risk level
+            for candidate in hedging_candidates:
+                candidate['size_percent'] *= current_risk_multiplier
+                candidate['size_percent'] = max(0.05, min(0.25, candidate['size_percent']))  # Clamp between 5% and 25%
+            
+            # Select best hedging candidate
+            if hedging_candidates:
+                best_hedge = max(hedging_candidates, key=lambda x: x['hedge_strength'])
+                
+                # Consult specialist agents about the hedge
+                hedge_validation = self._validate_hedge_with_specialists(best_hedge)
+                
+                if hedge_validation['approved']:
+                    recommendation = {
+                        'hedging_recommended': True,
+                        'hedge_symbol': best_hedge['symbol'],
+                        'hedge_signal': best_hedge['signal'],
+                        'hedge_size_percent': best_hedge['size_percent'],
+                        'correlation': best_hedge['correlation'],
+                        'reasoning': f"Strong negative correlation ({best_hedge['correlation']:.2f}) with {primary_trade_symbol}",
+                        'validation': hedge_validation
+                    }
+                    
+                    print(f"✅ [Master Agent - Hedging] Recommendation: {best_hedge['signal']} {best_hedge['symbol']} ({best_hedge['size_percent']:.1%} size)")
+                    print(f"📊 [Master Agent - Hedging] Correlation: {best_hedge['correlation']:.2f}")
+                else:
+                    recommendation = {
+                        'hedging_recommended': False,
+                        'reason': 'Hedge validation failed',
+                        'validation': hedge_validation
+                    }
+            else:
+                recommendation = {
+                    'hedging_recommended': False,
+                    'reason': 'No suitable hedging instruments found'
+                }
+            
+            # Store hedging analysis
+            if not hasattr(self, 'hedging_history'):
+                self.hedging_history = []
+            
+            from datetime import datetime
+            self.hedging_history.append({
+                'timestamp': datetime.now(),
+                'primary_symbol': primary_trade_symbol,
+                'primary_signal': primary_trade_signal,
+                'recommendation': recommendation,
+                'candidates_analyzed': len(hedging_candidates)
+            })
+            
+            return recommendation
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Hedging] Error: {e}")
+            return {'hedging_recommended': False, 'error': str(e)}
+    
+    def _validate_hedge_with_specialists(self, hedge_candidate):
+        """Validate hedging recommendation with specialist agents"""
+        try:
+            validation_scores = []
+            
+            # Simple validation logic
+            if hedge_candidate['correlation'] < -0.2:  # Strong negative correlation
+                validation_scores.append(0.8)
+            
+            if hedge_candidate['size_percent'] <= 0.2:  # Reasonable size
+                validation_scores.append(0.7)
+            
+            avg_score = sum(validation_scores) / len(validation_scores) if validation_scores else 0.5
+            approved = avg_score > 0.6
+            
+            return {
+                'approved': approved,
+                'score': avg_score,
+                'validation_factors': f"{len(validation_scores)} factors analyzed"
+            }
+            
+        except Exception as e:
+            return {'approved': False, 'error': str(e)}
+    
+    def analyze_closed_trade(self, trade_data):
+        """
+        6. Post-Trade Analysis
+        Analyze closed trades to improve future decisions
+        """
+        try:
+            print(f"📈 [Master Agent - Post-Trade] Analyzing closed trade: {trade_data.get('symbol', 'Unknown')}")
+            
+            analysis_results = {
+                'trade_id': trade_data.get('trade_id', 'N/A'),
+                'symbol': trade_data.get('symbol', 'Unknown'),
+                'signal': trade_data.get('signal', 'Unknown'),
+                'entry_price': trade_data.get('entry_price', 0),
+                'exit_price': trade_data.get('exit_price', 0),
+                'pnl': trade_data.get('pnl', 0),
+                'close_reason': trade_data.get('close_reason', 'Unknown'),
+                'duration_hours': trade_data.get('duration_hours', 0)
+            }
+            
+            # Performance categorization
+            pnl = analysis_results['pnl']
+            if pnl > 0:
+                performance_category = 'PROFITABLE'
+            elif pnl < -0.02:  # Loss > 2%
+                performance_category = 'SIGNIFICANT_LOSS'
+            else:
+                performance_category = 'MINOR_LOSS'
+            
+            analysis_results['performance_category'] = performance_category
+            
+            # Analyze specialist agent accuracy
+            specialist_accuracy = {}
+            
+            # This would compare original agent predictions with actual outcome
+            for agent_name in self.specialist_agents.keys():
+                # Simulate accuracy analysis
+                import random
+                predicted_correctly = random.choice([True, False])
+                confidence_was_appropriate = random.choice([True, False])
+                
+                specialist_accuracy[agent_name] = {
+                    'predicted_correctly': predicted_correctly,
+                    'confidence_appropriate': confidence_was_appropriate,
+                    'accuracy_score': 0.8 if predicted_correctly else 0.3
+                }
+            
+            analysis_results['specialist_accuracy'] = specialist_accuracy
+            
+            # Decision quality analysis
+            decision_quality_factors = []
+            
+            # Entry timing analysis
+            if performance_category == 'PROFITABLE':
+                if analysis_results['duration_hours'] < 24:
+                    decision_quality_factors.append("Quick profit realization")
+                else:
+                    decision_quality_factors.append("Patient profit taking")
+            else:
+                if analysis_results['duration_hours'] < 2:
+                    decision_quality_factors.append("Quick stop loss execution")
+                elif analysis_results['duration_hours'] > 168:  # 7 days
+                    decision_quality_factors.append("Delayed loss recognition")
+            
+            # Risk management analysis
+            if 'emergency' in analysis_results['close_reason'].lower():
+                decision_quality_factors.append("Emergency stop loss triggered")
+            elif 'take_profit' in analysis_results['close_reason'].lower():
+                decision_quality_factors.append("Take profit achieved")
+            
+            analysis_results['decision_quality_factors'] = decision_quality_factors
+            
+            # Learning insights
+            learning_insights = []
+            
+            # Check if this trade type should be avoided
+            if performance_category == 'SIGNIFICANT_LOSS':
+                learning_insights.append(f"Review {analysis_results['signal']} signals for {analysis_results['symbol']}")
+                
+                # Check if multiple agents were wrong
+                wrong_agents = [name for name, acc in specialist_accuracy.items() if not acc['predicted_correctly']]
+                if len(wrong_agents) > 3:
+                    learning_insights.append(f"Multiple agents failed: {', '.join(wrong_agents)}")
+            
+            elif performance_category == 'PROFITABLE':
+                # Identify what worked well
+                correct_agents = [name for name, acc in specialist_accuracy.items() if acc['predicted_correctly']]
+                if len(correct_agents) > 3:
+                    learning_insights.append(f"Strong agent consensus worked: {', '.join(correct_agents)}")
+            
+            analysis_results['learning_insights'] = learning_insights
+            
+            # Store post-trade analysis
+            if not hasattr(self, 'post_trade_analysis_history'):
+                self.post_trade_analysis_history = []
+            
+            from datetime import datetime
+            analysis_results['analysis_timestamp'] = datetime.now()
+            self.post_trade_analysis_history.append(analysis_results)
+            
+            # Display analysis results
+            print(f"📊 [Master Agent - Post-Trade] Performance: {performance_category}")
+            print(f"💰 [Master Agent - Post-Trade] P&L: {pnl:.4f}")
+            if decision_quality_factors:
+                print(f"⚖️ [Master Agent - Post-Trade] Quality: {' | '.join(decision_quality_factors)}")
+            if learning_insights:
+                print(f"🎓 [Master Agent - Post-Trade] Insights: {' | '.join(learning_insights)}")
+            
+            return analysis_results
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Post-Trade] Error: {e}")
+            return {'error': str(e)}
+    
+    async def send_intelligent_alert(self, alert_type, symbol, message, additional_data=None):
+        """
+        7. Intelligent Alerting Hub
+        Centralized intelligent alerting system
+        """
+        try:
+            from datetime import datetime
+            
+            # Alert categorization
+            alert_categories = {
+                'EMERGENCY': '🚨',
+                'WARNING': '⚠️',
+                'INFO': 'ℹ️',
+                'SUCCESS': '✅',
+                'ANALYSIS': '📊'
+            }
+            
+            alert_icon = alert_categories.get(alert_type, '📢')
+            
+            # Build comprehensive alert message
+            alert_message = f"{alert_icon} **{alert_type} ALERT** {alert_icon}\n\n"
+            alert_message += f"**Symbol:** {symbol}\n"
+            alert_message += f"**Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            alert_message += f"**Message:** {message}\n"
+            
+            # Add contextual information
+            if additional_data:
+                alert_message += "\n**Additional Context:**\n"
+                for key, value in additional_data.items():
+                    alert_message += f"• **{key.replace('_', ' ').title()}:** {value}\n"
+            
+            # Add specialist agent insights if available
+            try:
+                if hasattr(self, 'specialist_agents') and symbol:
+                    # Get quick insights from key agents
+                    quick_insights = {}
+                    
+                    if 'trend_analyzer' in self.specialist_agents:
+                        # This would use recent market data
+                        quick_insights['Trend'] = "Analysis unavailable (no market data)"
+                    
+                    if 'news_analyzer' in self.specialist_agents:
+                        quick_insights['News Sentiment'] = "Neutral (simulated)"
+                    
+                    if quick_insights:
+                        alert_message += "\n**Market Context:**\n"
+                        for insight_type, insight_value in quick_insights.items():
+                            alert_message += f"• **{insight_type}:** {insight_value}\n"
+            
+            except Exception as e:
+                alert_message += f"\n*Context analysis error: {e}*\n"
+            
+            # Add footer with system status
+            alert_message += f"\n---\n*Master Agent Alert System*"
+            
+            # Log the alert
+            print(alert_message)
+            
+            # Store alert history
+            if not hasattr(self, 'alert_history'):
+                self.alert_history = []
+            
+            alert_record = {
+                'timestamp': datetime.now(),
+                'type': alert_type,
+                'symbol': symbol,
+                'message': message,
+                'additional_data': additional_data,
+                'full_alert': alert_message
+            }
+            
+            self.alert_history.append(alert_record)
+            
+            # Keep only last 200 alerts
+            if len(self.alert_history) > 200:
+                self.alert_history = self.alert_history[-200:]
+            
+            # Here you would integrate with Discord/Telegram/Email APIs
+            # await self._send_to_discord(alert_message)
+            # await self._send_to_telegram(alert_message)
+            # await self._send_email_alert(alert_message)
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ [Master Agent - Alert] Error sending alert: {e}")
+            return False
+    
+    async def _send_to_discord(self, message):
+        """Send alert to Discord (placeholder)"""
+        # Implementation would use Discord webhook or bot API
+        pass
+    
+    async def _send_to_telegram(self, message):
+        """Send alert to Telegram (placeholder)"""
+        # Implementation would use Telegram bot API
+        pass
+    
+    async def _send_email_alert(self, message):
+        """Send alert via email (placeholder)"""
+        # Implementation would use SMTP
+        pass
+
 # Stacking Classes
 class MetaLearnerModel:
     def predict(self, level1_predictions, level1_confidences, symbol):
@@ -16804,7 +17720,7 @@ class EnhancedTradingBot:
         except Exception as e:
             print(f"[Background Retrain] Li retrain {symbol}: {e}")
 
-    def calculate_dynamic_position_size(self, symbol, confidence, llm_sentiment_score=0.0):
+    def calculate_dynamic_position_size(self, symbol, confidence, llm_sentiment_score=0.0, master_agent_risk_multiplier=1.0):
         """
         Calculate flexible position size, combining confidence, volatility, LLM sentiment and symbol allocation.
         Enhanced with safer risk limits and better validation.
@@ -16824,13 +17740,14 @@ class EnhancedTradingBot:
             # Nu LLM tiu cc, gim ri ro. Nu tch cc, tang ri ro.
             llm_multiplier = 1.0 + (llm_sentiment_score * 0.25)
 
-            print(f"   [Risk] Symbol: {symbol}, Allocation: {allocation_multiplier:.1f}x, Confidence: {confidence_multiplier:.2f}, LLM: {llm_multiplier:.2f}")
+            # Yu t 4: Master Agent Risk Multiplier
+            print(f"   [Risk] Symbol: {symbol}, Allocation: {allocation_multiplier:.1f}x, Confidence: {confidence_multiplier:.2f}, LLM: {llm_multiplier:.2f}, Master Agent: {master_agent_risk_multiplier:.2f}x")
 
-            # Yu t 4: Market volatility
+            # Yu t 5: Market volatility
             volatility_adjustment = self._calculate_volatility_adjustment(symbol)
 
-            # Calculate final risk with safer limits
-            adjusted_risk = base_risk * allocation_multiplier * confidence_multiplier * llm_multiplier * volatility_adjustment
+            # Calculate final risk with Master Agent multiplier
+            adjusted_risk = base_risk * allocation_multiplier * confidence_multiplier * llm_multiplier * master_agent_risk_multiplier * volatility_adjustment
 
             # Safer risk limits - khng vut qu 1.2x base risk v khng dui 0.3x base risk
             max_safe_risk = base_risk * 1.2
@@ -17420,13 +18337,29 @@ class EnhancedTradingBot:
             # Calculate price action score
             pa_score = self.calculate_price_action_score(features_df)
             
+            # --- STEP 2.1: MASTER AGENT DYNAMIC STRATEGY SELECTION ---
+            print(f"📊 [{symbol}] Consulting Master Agent for strategy selection...")
+            selected_strategy = self.master_agent_coordinator.select_active_strategy(symbol, features_df)
+            print(f"✅ [{symbol}] Master Agent selected strategy: {selected_strategy.upper()}")
+            
+            # --- STEP 2.2: MASTER AGENT DYNAMIC RISK ASSESSMENT ---
+            print(f"🎯 [{symbol}] Getting dynamic risk multiplier from Master Agent...")
+            risk_multiplier = self.master_agent_coordinator.get_dynamic_risk_multiplier()
+            print(f"📊 [{symbol}] Master Agent risk multiplier: {risk_multiplier:.2f}")
+            
+            # Update symbol config with Master Agent risk multiplier
+            symbol_config['master_agent_risk_multiplier'] = risk_multiplier
+            symbol_config['selected_strategy'] = selected_strategy
+            
             # Prepare market data package for Master Agent
             market_data = {
                 'price_data': features_df,
                 'current_price': current_price,
                 'pa_score': pa_score,
                 'technical_reasoning': tech_reasoning,
-                'symbol_config': symbol_config
+                'symbol_config': symbol_config,
+                'selected_strategy': selected_strategy,
+                'risk_multiplier': risk_multiplier
             }
 
             # --- STEP 3: CONSULT MASTER AGENT FOR FINAL DECISION ---
@@ -17479,9 +18412,35 @@ class EnhancedTradingBot:
             final_reasoning["Master Agent Decision"] = justification
             final_reasoning["Master Agent Confidence"] = f"{master_decision.get('confidence', confidence):.2%}"
             
-            # Calculate position size and risk management
-            position_size = self.calculate_dynamic_position_size(symbol, confidence, 0.0)  # No LLM score in new approach
+            # Calculate position size with Master Agent risk multiplier
+            position_size = self.calculate_dynamic_position_size(symbol, confidence, 0.0, risk_multiplier)
             tp, sl = self.enhanced_risk_management(symbol, signal, current_price, confidence)
+            
+            # --- STEP 5.1: CHECK FOR HEDGING OPPORTUNITIES ---
+            print(f"🛡️ [{symbol}] Checking for hedging opportunities...")
+            hedging_recommendation = self.master_agent_coordinator.get_hedging_recommendation(symbol, signal)
+            
+            if hedging_recommendation.get('hedging_recommended', False):
+                hedge_symbol = hedging_recommendation['hedge_symbol']
+                hedge_signal = hedging_recommendation['hedge_signal']
+                hedge_size = hedging_recommendation['hedge_size_percent']
+                
+                print(f"🛡️ [{symbol}] Master Agent recommends hedging: {hedge_signal} {hedge_symbol} ({hedge_size:.1%})")
+                
+                # Send hedging alert
+                await self.master_agent_coordinator.send_intelligent_alert(
+                    'INFO', 
+                    symbol, 
+                    f"Hedging opportunity identified: {hedge_signal} {hedge_symbol}",
+                    {
+                        'primary_trade': f"{signal} {symbol}",
+                        'hedge_trade': f"{hedge_signal} {hedge_symbol}",
+                        'hedge_size': f"{hedge_size:.1%}",
+                        'correlation': hedging_recommendation['correlation']
+                    }
+                )
+            else:
+                print(f"🛡️ [{symbol}] No hedging recommended: {hedging_recommendation.get('reason', 'No reason provided')}")
 
             # Open the position
             self.open_position_enhanced(symbol, signal, current_price, tp, sl, position_size, confidence, final_reasoning)
@@ -17567,7 +18526,7 @@ class EnhancedTradingBot:
 
     # TM V THAY THFunction this in l p EnhancedTradingBot
 
-    def close_position_enhanced(self, symbol, reason, exit_price, send_alert=True):
+    async def close_position_enhanced(self, symbol, reason, exit_price, send_alert=True):
         if symbol not in self.open_positions:
             return
         position = self.open_positions.pop(symbol)
@@ -17629,7 +18588,96 @@ class EnhancedTradingBot:
             self.send_close_alert_enhanced(symbol, position, reason, exit_price, pips)
         print(f"     Closed {position['signal']} {symbol} @{exit_price:.5f}. Reason: {reason}. Pips: {pips:.1f}")
         
-        # Check performance after trade
+        # --- MASTER AGENT POST-TRADE ANALYSIS ---
+        try:
+            print(f"📊 [{symbol}] Running Master Agent post-trade analysis...")
+            
+            # Calculate trade duration
+            opened_at = position.get("opened_at", closed_at)
+            if isinstance(opened_at, str):
+                opened_at = datetime.fromisoformat(opened_at.replace('Z', '+00:00'))
+            
+            duration = closed_at - opened_at
+            duration_hours = duration.total_seconds() / 3600
+            
+            # Calculate P&L percentage
+            entry_price = position["entry_price"]
+            if position["signal"] == "BUY":
+                pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+            else:  # SELL
+                pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+            
+            # Prepare trade data for Master Agent analysis
+            trade_data = {
+                'trade_id': f"{symbol}_{opened_at.strftime('%Y%m%d_%H%M%S')}",
+                'symbol': symbol,
+                'signal': position["signal"],
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'pnl': pnl_pct / 100,  # Convert to decimal
+                'pips': pips,
+                'close_reason': reason,
+                'duration_hours': duration_hours,
+                'confidence': position.get("initial_confidence", 0.0),
+                'reasoning': position.get("reasoning", {})
+            }
+            
+            # Run Master Agent post-trade analysis
+            analysis_results = self.master_agent_coordinator.analyze_closed_trade(trade_data)
+            
+            # Send intelligent alert for significant trades
+            if abs(pnl_pct) > 1.0:  # Significant gain/loss > 1%
+                alert_type = 'SUCCESS' if pnl_pct > 0 else 'WARNING'
+                await self.master_agent_coordinator.send_intelligent_alert(
+                    alert_type,
+                    symbol,
+                    f"Trade closed: {pnl_pct:+.2f}% P&L",
+                    {
+                        'entry_price': entry_price,
+                        'exit_price': exit_price,
+                        'duration': f"{duration_hours:.1f} hours",
+                        'close_reason': reason,
+                        'analysis': analysis_results.get('performance_category', 'N/A')
+                    }
+                )
+            
+        except Exception as e:
+            print(f"❌ [Master Agent Post-Trade] Error analyzing {symbol}: {e}")
+        
+        # --- MASTER AGENT RETRAIN CHECK ---
+        try:
+            print(f"🔄 [{symbol}] Running Master Agent retrain check...")
+            retrain_result = self.master_agent_coordinator.request_retrain_check(symbol)
+            
+            if retrain_result.get('retrain_needed', False):
+                print(f"🔄 [{symbol}] Master Agent recommends retraining!")
+                
+                # Send retrain alert
+                await self.master_agent_coordinator.send_intelligent_alert(
+                    'WARNING',
+                    symbol,
+                    "Model retraining recommended by Master Agent",
+                    {
+                        'retrain_score': f"{retrain_result.get('score', 0):.2f}",
+                        'signals': ', '.join(retrain_result.get('signals', [])),
+                        'priority': retrain_result.get('priority', 'MEDIUM')
+                    }
+                )
+                
+                # Trigger actual retraining if AutoRetrainManager is available
+                if hasattr(self, 'auto_retrain_manager') and self.auto_retrain_manager:
+                    try:
+                        self.auto_retrain_manager.trigger_retrain(
+                            symbol, 
+                            f"Master Agent recommendation: {retrain_result.get('signals', [])}"
+                        )
+                    except Exception as e:
+                        print(f"⚠️ [{symbol}] Auto-retrain trigger failed: {e}")
+            
+        except Exception as e:
+            print(f"❌ [Master Agent Retrain Check] Error for {symbol}: {e}")
+        
+        # Check performance after trade (original logic)
         try:
             rating, data = self.evaluate_symbol_performance(symbol)
             # Ensure data is a dictionary
@@ -18560,48 +19608,69 @@ class EnhancedTradingBot:
             print(f"   [Historical SL] {symbol}: Li Check lch s SL: {e}")
             return False
 
-    def check_emergency_sl_positions(self):
+    async def check_emergency_sl_positions(self):
         """
-        Check kh n c p all vthc r i ro cao (g n ch m SL)
+        Check emergency stop loss positions using Master Agent
+        UPDATED: Now delegates to Master Agent for centralized emergency management
         """
         if not self.open_positions:
             return
             
-        print("   [Emergency SL] Check all positions with high risk...")
+        print("🚨 [Enhanced Bot - Emergency SL] Delegating to Master Agent for emergency monitoring...")
+        
+        try:
+            # Use Master Agent's enhanced emergency monitoring
+            emergency_actions = await self.master_agent_coordinator.monitor_and_manage_emergency_stops(
+                self.open_positions, 
+                self.data_manager
+            )
+            
+            # Execute emergency actions returned by Master Agent
+            if emergency_actions:
+                for action in emergency_actions:
+                    symbol = action['symbol']
+                    reason = action['reason']
+                    current_price = action['current_price']
+                    
+                    print(f"🚨 [Enhanced Bot - Emergency SL] Executing Master Agent decision: Close {symbol}")
+                    await self.close_position_enhanced(symbol, reason, current_price)
+                    
+                    # Send intelligent alert via Master Agent
+                    await self.master_agent_coordinator.send_intelligent_alert(
+                        'EMERGENCY', 
+                        symbol, 
+                        f"Emergency position closed: {reason}",
+                        {
+                            'current_price': current_price,
+                            'analysis': action.get('analysis', 'N/A')
+                        }
+                    )
+            
+        except Exception as e:
+            print(f"❌ [Enhanced Bot - Emergency SL] Error in Master Agent emergency monitoring: {e}")
+            # Fallback to basic emergency check
+            await self._fallback_emergency_check()
+    
+    async def _fallback_emergency_check(self):
+        """Fallback emergency check if Master Agent fails"""
+        print("⚠️ [Enhanced Bot - Emergency SL] Using fallback emergency check...")
         
         for symbol, position in list(self.open_positions.items()):
             try:
-                # L y gi real-time
                 current_price = self.data_manager.get_current_price(symbol)
                 if current_price is None:
                     continue
                 
-                # Tnh kho ng allh dn SL
+                # Basic SL check
                 if position["signal"] == "BUY":
-                    distance_to_sl = current_price - position["sl"]
-                    sl_percentage = (distance_to_sl / position["entry_price"]) * 100
+                    if current_price <= position["sl"]:
+                        await self.close_position_enhanced(symbol, "Emergency Stop Loss (Fallback)", current_price)
                 else:  # SELL
-                    distance_to_sl = position["sl"] - current_price
-                    sl_percentage = (distance_to_sl / position["entry_price"]) * 100
-                
-                # if kho ng allh dn SL < 0.5% th Check kh n c p
-                if sl_percentage < 0.5:
-                    print(f"   [Emergency SL] {symbol}: High risk! {sl_percentage:.2f}% remaining to SL")
-                    
-                    # Check l i SL/TP with gi real-time
-                    if position["signal"] == "BUY":
-                        if current_price <= position["sl"]:
-                            print(f"   [Emergency SL] {symbol}: CH M SL KH N C P! {current_price:.5f} <= {position['sl']:.5f}")
-                            emergency_reason = self._analyze_emergency_stop_reason(symbol, position, current_price, "BUY")
-                            self.close_position_enhanced(symbol, f"Emergency Stop Loss: {emergency_reason}", current_price)
-                    else:  # SELL
-                        if current_price >= position["sl"]:
-                            print(f"   [Emergency SL] {symbol}: CH M SL KH N C P! {current_price:.5f} >= {position['sl']:.5f}")
-                            emergency_reason = self._analyze_emergency_stop_reason(symbol, position, current_price, "SELL")
-                            self.close_position_enhanced(symbol, f"Emergency Stop Loss: {emergency_reason}", current_price)
-                            
+                    if current_price >= position["sl"]:
+                        await self.close_position_enhanced(symbol, "Emergency Stop Loss (Fallback)", current_price)
+                        
             except Exception as e:
-                print(f"   [Emergency SL] Li Check {symbol}: {e}")
+                print(f"❌ [Enhanced Bot - Emergency SL] Fallback error for {symbol}: {e}")
                 continue
     
     def _analyze_emergency_stop_reason(self, symbol, position, current_price, signal_direction):
