@@ -12760,6 +12760,72 @@ class MasterAgent:
             print(f"❌ [Master Agent] Error in TP/SL decision for {symbol}: {e}")
             return self._get_fallback_tp_sl_levels(entry_price, direction)
     
+    def decide_trade_entry(self, symbol, market_data, base_signal, base_confidence):
+        """
+        The final entry decision method, synthesizing multiple sources.
+        Returns a dictionary with the decision and justification.
+        """
+        print(f"🎯 [Master Agent] Analyzing ENTRY for {base_signal} {symbol} (Confidence: {base_confidence:.2%})")
+        
+        agent_opinions = {}
+        agent_confidences = {}
+        
+        # Run specialist agents
+        for agent_name, agent in self.specialist_agents.items():
+            try:
+                opinion, confidence = agent.analyze(market_data['price_data'], symbol)
+                agent_opinions[agent_name] = opinion
+                agent_confidences[agent_name] = confidence
+            except Exception as e:
+                print(f"❌ Error running {agent_name}: {e}")
+                agent_opinions[agent_name] = "HOLD"
+                agent_confidences[agent_name] = 0.5
+                
+        # Synthesize opinions
+        buy_votes = sum(conf for agent, op in agent_opinions.items() if op == "BUY" for conf in [agent_confidences[agent]])
+        sell_votes = sum(conf for agent, op in agent_opinions.items() if op == "SELL" for conf in [agent_confidences[agent]])
+
+        # Analyze market structure - need to access bot instance for this
+        # We'll pass this as part of market_data or calculate it here
+        pa_score = 0.0
+        if 'pa_score' in market_data:
+            pa_score = market_data['pa_score']
+        
+        # Final decision logic
+        final_decision = "HOLD"
+        justification = []
+
+        if base_signal == "BUY":
+            if buy_votes > sell_votes * 1.5 and pa_score > 0.1:
+                final_decision = "APPROVE"
+                justification.append(f"Strong consensus from specialist agents (Buy Score: {buy_votes:.2f}).")
+                justification.append(f"Favorable Price Action (Score: {pa_score:.2f}).")
+            else:
+                final_decision = "REJECT"
+                justification.append(f"Weak consensus (Buy Score: {buy_votes:.2f} vs Sell Score: {sell_votes:.2f}).")
+                if pa_score <= 0.1:
+                    justification.append(f"Unfavorable Price Action (Score: {pa_score:.2f}).")
+
+        elif base_signal == "SELL":
+            if sell_votes > buy_votes * 1.5 and pa_score < -0.1:
+                final_decision = "APPROVE"
+                justification.append(f"Strong consensus from specialist agents (Sell Score: {sell_votes:.2f}).")
+                justification.append(f"Favorable Price Action (Score: {pa_score:.2f}).")
+            else:
+                final_decision = "REJECT"
+                justification.append(f"Weak consensus (Sell Score: {sell_votes:.2f} vs Buy Score: {buy_votes:.2f}).")
+                if pa_score >= -0.1:
+                    justification.append(f"Unfavorable Price Action (Score: {pa_score:.2f}).")
+
+        print(f"✅ [Master Agent] Decision: {final_decision}")
+        print(f"📝 [Master Agent] Justification: {' '.join(justification)}")
+        
+        return {
+            "decision": final_decision,
+            "justification": " ".join(justification),
+            "confidence": base_confidence
+        }
+
     def decide_trailing_stop_activation(self, symbol, current_price, entry_price, direction, market_data):
         """
         Intelligent decision on when to activate trailing stops
@@ -17312,38 +17378,94 @@ class EnhancedTradingBot:
 
     async def handle_position_logic(self, symbol, signal, confidence):
         """
-        Main orchestra function to handle new position opening logic.
-        Process: Check symbol status -> Getopinions -> Basic filtering -> Ask Master Agent -> Calculate -> Open order.
-        Converted to asynfromo be compatible with new functions.
+        Refactored position logic with MasterAgent as central decision-maker.
+        Process: Basic checks -> Gather market data -> Ask Master Agent for final decision -> Execute if approved.
         """
         try:
-            # --- BU C 0: Check SYMBOL STATUS ---
+            # --- STEP 1: BASIC INITIAL CHECKS ---
             symbol_config = SYMBOL_ALLOCATION.get(symbol, {"weight": 1.0, "max_exposure": 0.1, "risk_multiplier": 1.0})
-            # Check xem symbol fromrong danh scontainsctive not
+            
+            # Check if symbol is in active symbols
             if symbol not in self.active_symbols:
-                print(f"[{symbol}] Symbol not d activate in active_symbols")
+                print(f"[{symbol}] Symbol not activated in active_symbols")
                 return
 
-            # --- BU C 1: L Y all LU N I M KTHU T ---
-            # (not g i LLM bu cthis)
+            # Check minimum confidence threshold
+            if confidence < ML_CONFIG["MIN_CONFIDENCE_TRADE"]:
+                print(f"[{symbol}] Skipping: Confidence ({confidence:.2%}) too low.")
+                return
+
+            # --- STEP 2: GATHER ALL NECESSARY MARKET DATA ---
+            print(f"🔍 [{symbol}] Gathering market data for Master Agent analysis...")
+            
+            # Get technical reasoning and features
             tech_reasoning = await self.gather_trade_reasoning(symbol, signal, confidence)
-            if "Li" in tech_reasoning:
+            if "Error" in tech_reasoning:
                 error_message = tech_reasoning.get('Error', 'Unknown error occurred')
                 print(f"[{symbol}] Skipping due to error when collecting reasoning: {error_message}")
                 return
 
-            # --- BU C 2: all BL C CO B N (not T N API) ---
-            if confidence < ML_CONFIG["MIN_CONFIDENCE_TRADE"]:
-                print(f"[{symbol}] Skipping: Confidence ({confidence:.2%}) too low.")
+            # Get current price and features DataFrame
+            current_price = self.data_manager.get_current_price(symbol)
+            if current_price is None:
+                print(f"[{symbol}] Skipping: Unable to get current price")
                 return
+
+            # Get features DataFrame for price action analysis
+            features_df = self.data_manager.get_features_dataframe(symbol)
+            if features_df is None or features_df.empty:
+                print(f"[{symbol}] Warning: No features data available, using fallback")
+                features_df = pd.DataFrame()
+
+            # Calculate price action score
+            pa_score = self.calculate_price_action_score(features_df)
+            
+            # Prepare market data package for Master Agent
+            market_data = {
+                'price_data': features_df,
+                'current_price': current_price,
+                'pa_score': pa_score,
+                'technical_reasoning': tech_reasoning,
+                'symbol_config': symbol_config
+            }
+
+            # --- STEP 3: CONSULT MASTER AGENT FOR FINAL DECISION ---
+            print(f"🎯 [{symbol}] Consulting Master Agent for entry decision...")
+            master_decision = self.master_agent_coordinator.decide_trade_entry(
+                symbol=symbol,
+                market_data=market_data,
+                base_signal=signal,
+                base_confidence=confidence
+            )
+
+            # --- STEP 4: PROCESS MASTER AGENT DECISION ---
+            decision = master_decision.get("decision", "REJECT")
+            justification = master_decision.get("justification", "No justification provided")
+            
+            if decision.upper() == "REJECT":
+                print(f"❌ [{symbol}] Trade REJECTED by Master Agent: {justification}")
+                self.send_discord_alert(
+                    f"**ORDER REJECTED BY MASTER AGENT**\n"
+                    f"- **Order:** `{signal} {symbol}`\n"
+                    f"- **Reason:** *{justification}*\n"
+                    f"- **Confidence:** {confidence:.2%}"
+                )
+                return
+            
+            elif decision.upper() == "WAIT":
+                print(f"⏳ [{symbol}] Master Agent recommends WAITING: {justification}")
+                return
+
+            # --- STEP 5: EXECUTE APPROVED TRADE ---
+            print(f"✅ [{symbol}] Trade APPROVED by Master Agent: {justification}")
+            
+            # Perform remaining checks only after Master Agent approval
             if TRADE_FILTERS.get("SKIP_NEAR_HIGH_IMPACT_EVENTS", True) and self.has_high_impact_event_soon(symbol):
-                # Function already prints the reason
                 return
             if not self.portfolio_risk_check():
                 print(f"[{symbol}] Skipping: Portfolio risk has reached maximum level.")
                 return
             if not self.correlation_check(symbol, signal):
-                # Function already prints the reason
                 return
             if len(self.open_positions) >= RISK_MANAGEMENT["MAX_OPEN_POSITIONS"]:
                 print(f"[{symbol}] Skipping: Maximum number of positions reached.")
@@ -17352,39 +17474,21 @@ class EnhancedTradingBot:
                 print(f"[{symbol}] Skipping: Weekend trading.")
                 return
 
-            # --- BU C 3: L Y TIN T C V H I  KI N MASTER AGENT (1 API CALL DUY NH T) ---
-            news_items = await self.news_manager.get_aggregated_news(symbol)
-            master_decision_data = await self.consult_master_agent(symbol, signal, tech_reasoning, news_items)
-
-            # --- BU C 3.5: NH D U SYMBOL Check CONCEPT DRIFT SAU ---
-            # Concept drift sd Check sau khi t t csymbols has d analysis
-            # dtrnh gin do n qu trnh analysis
-
-            # if Master Agent t chi, gi thng bo v dng li
-            if master_decision_data.get("decision", "").upper() == "REJECT":
-                self.send_discord_alert(f"**ORDER REJECTED BY MASTER AGENT**  \n- **Order:** `{signal} {symbol}`\n- **Reason:** *{master_decision_data.get('justification')}*")
-                return
-
-            # --- BU C 4: HON THI N LU N I M V TNH TON THAM SL NH ---
-            final_reasoning = tech_reasoning
-            final_reasoning["Ph duy from modelaster Agent"] = master_decision_data.get('justification')
-            final_reasoning[" analysis LLM"] = f"**i m: {master_decision_data.get('sentiment_score', 0.0):.2f}**"
-
-            current_price = self.data_manager.get_current_price(symbol)
-            if current_price is None:
-                return
-
-            # L y di m sentiment tk t quof Master Agent dtnh ton kch thu c l nh
-            llm_score = master_decision_data.get('sentiment_score', 0.0)
-            position_size = self.calculate_dynamic_position_size(symbol, confidence, llm_score)
+            # Prepare final reasoning with Master Agent input
+            final_reasoning = tech_reasoning.copy()
+            final_reasoning["Master Agent Decision"] = justification
+            final_reasoning["Master Agent Confidence"] = f"{master_decision.get('confidence', confidence):.2%}"
+            
+            # Calculate position size and risk management
+            position_size = self.calculate_dynamic_position_size(symbol, confidence, 0.0)  # No LLM score in new approach
             tp, sl = self.enhanced_risk_management(symbol, signal, current_price, confidence)
 
-            # --- BU C 5: MVTH---
+            # Open the position
             self.open_position_enhanced(symbol, signal, current_price, tp, sl, position_size, confidence, final_reasoning)
 
         except Exception as e:
             import traceback
-            error_message = f"Li nghim trng khi processing vth{symbol}: {e}\n{traceback.format_exc()}"
+            error_message = f"Critical error processing {symbol}: {e}\n{traceback.format_exc()}"
             print(error_message)
             self.send_discord_alert(error_message)
 
@@ -17428,13 +17532,13 @@ class EnhancedTradingBot:
             self.open_positions[symbol] = position_details
             save_open_positions(self.open_positions)
 
-            # Extracfrom modelaster Agent decision from reasoning
+            # Extract Master Agent decision from reasoning
             master_decision = None
-            if "Ph duy from modelaster Agent" in reasoning:
+            if "Master Agent Decision" in reasoning:
                 master_decision = {
-                    "decision": "APPROVE",  # If we reach here, it wafixpproved
-                    "justification": reasoning.get("Ph duy from modelaster Agent", "N/A"),
-                    "sentiment_score": float(reasoning.get(" analysis LLM", "0.0").replace("**i m: ", "").replace("**", "")) if " analysis LLM" in reasoning else 0.0
+                    "decision": "APPROVE",  # If we reach here, it was approved
+                    "justification": reasoning.get("Master Agent Decision", "N/A"),
+                    "confidence": reasoning.get("Master Agent Confidence", "N/A")
                 }
 
             self.send_enhanced_alert(
