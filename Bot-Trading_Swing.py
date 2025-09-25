@@ -47,6 +47,14 @@ from typing import Dict, Any, List, Optional, Union, Tuple
 ENABLE_HISTORICAL_SL_CHECK = False  # Set to False to disable historical SL checking
 SEND_HISTORICAL_SL_ALERTS = False   # Set to True to send Discord alerts for historical SL (only if ENABLE_HISTORICAL_SL_CHECK is True)
 
+# ===== REAL-TIME MONITORING CONFIGURATION =====
+ENABLE_REALTIME_MONITORING = True   # Enable real-time price monitoring for SL/TP
+REALTIME_CHECK_INTERVAL = 30        # Seconds between real-time price checks
+ENABLE_WICK_DETECTION = True        # Check candle wicks/shadows for SL/TP hits
+WICK_DETECTION_CANDLES = 3          # Number of recent candles to check for wicks
+MAX_REALTIME_RETRIES = 3            # Max retries for real-time price fetching
+REALTIME_TIMEOUT = 10               # Timeout in seconds for real-time API calls
+
 class SymbolType(Enum):
     """Enum for symbol types"""
     CRYPTO = "crypto"
@@ -54,6 +62,300 @@ class SymbolType(Enum):
     EQUITY = "equity"
     COMMODITY = "commodity"
     UNKNOWN = "unknown"
+
+class RealTimeMonitor:
+    """
+    Real-time price monitoring system for SL/TP detection
+    Phát hiện chính xác SL/TP hits bao gồm cả wicks/shadows
+    """
+    
+    def __init__(self, data_manager, logger):
+        self.data_manager = data_manager
+        self.logger = logger
+        self.monitoring_active = False
+        self.monitor_task = None
+        self.positions_to_monitor = {}
+        self.last_check_time = {}
+        
+    def start_monitoring(self, positions):
+        """Bắt đầu theo dõi real-time cho các vị thế"""
+        if not ENABLE_REALTIME_MONITORING:
+            return
+            
+        self.positions_to_monitor = positions.copy()
+        if not self.monitoring_active and self.positions_to_monitor:
+            self.monitoring_active = True
+            self.monitor_task = asyncio.create_task(self._monitoring_loop())
+            self.logger.info(f"🔄 [Real-time Monitor] Started monitoring {len(positions)} positions")
+    
+    def stop_monitoring(self):
+        """Dừng theo dõi real-time"""
+        self.monitoring_active = False
+        if self.monitor_task:
+            self.monitor_task.cancel()
+        self.logger.info("⏹️ [Real-time Monitor] Stopped monitoring")
+    
+    def update_positions(self, positions):
+        """Cập nhật danh sách vị thế cần theo dõi"""
+        self.positions_to_monitor = positions.copy()
+        if not positions and self.monitoring_active:
+            self.stop_monitoring()
+    
+    async def _monitoring_loop(self):
+        """Vòng lặp chính cho việc theo dõi real-time"""
+        while self.monitoring_active:
+            try:
+                if not self.positions_to_monitor:
+                    await asyncio.sleep(REALTIME_CHECK_INTERVAL)
+                    continue
+                
+                # Kiểm tra từng vị thế
+                positions_to_close = []
+                for symbol, position in self.positions_to_monitor.items():
+                    hit_result = await self._check_sl_tp_hit(symbol, position)
+                    if hit_result:
+                        positions_to_close.append((symbol, hit_result))
+                
+                # Xử lý các vị thế cần đóng
+                for symbol, hit_result in positions_to_close:
+                    await self._handle_position_hit(symbol, hit_result)
+                
+                await asyncio.sleep(REALTIME_CHECK_INTERVAL)
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"❌ [Real-time Monitor] Error in monitoring loop: {e}")
+                await asyncio.sleep(5)  # Short delay before retry
+    
+    async def _check_sl_tp_hit(self, symbol, position):
+        """
+        Kiểm tra xem SL hoặc TP có bị hit không
+        Bao gồm cả kiểm tra wicks/shadows
+        """
+        try:
+            # 1. Lấy giá hiện tại
+            current_price = await self._get_realtime_price(symbol)
+            if current_price is None:
+                return None
+            
+            # 2. Kiểm tra SL/TP với giá hiện tại
+            hit_type = self._check_current_price_hit(position, current_price)
+            if hit_type:
+                return {
+                    'type': hit_type,
+                    'price': current_price,
+                    'method': 'current_price',
+                    'timestamp': datetime.now(pytz.timezone("Asia/Bangkok"))
+                }
+            
+            # 3. Kiểm tra wicks/shadows nếu được bật
+            if ENABLE_WICK_DETECTION:
+                wick_hit = await self._check_wick_hit(symbol, position)
+                if wick_hit:
+                    return wick_hit
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ [Real-time Monitor] Error checking {symbol}: {e}")
+            return None
+    
+    def _check_current_price_hit(self, position, current_price):
+        """Kiểm tra SL/TP với giá hiện tại"""
+        signal = position['signal']
+        sl_price = position['sl']
+        tp_price = position['tp']
+        
+        if signal == "BUY":
+            if current_price <= sl_price:
+                return "SL"
+            elif current_price >= tp_price:
+                return "TP"
+        else:  # SELL
+            if current_price >= sl_price:
+                return "SL"
+            elif current_price <= tp_price:
+                return "TP"
+        
+        return None
+    
+    async def _check_wick_hit(self, symbol, position):
+        """
+        Kiểm tra xem có nến nào có wick chạm SL/TP không
+        Đây là tính năng quan trọng để phát hiện các trường hợp như XAUUSD
+        """
+        try:
+            # Lấy dữ liệu nến gần nhất
+            primary_tf = PRIMARY_TIMEFRAME_BY_SYMBOL.get(symbol, PRIMARY_TIMEFRAME_DEFAULT)
+            multi_tf_data = self.data_manager.fetch_multi_timeframe_data(
+                symbol, 
+                count=WICK_DETECTION_CANDLES + 2
+            )
+            
+            if not multi_tf_data or primary_tf not in multi_tf_data:
+                return None
+            
+            df = multi_tf_data[primary_tf]
+            if df is None or len(df) < WICK_DETECTION_CANDLES:
+                return None
+            
+            # Kiểm tra các nến gần nhất
+            recent_candles = df.tail(WICK_DETECTION_CANDLES)
+            signal = position['signal']
+            sl_price = position['sl']
+            tp_price = position['tp']
+            
+            for idx, candle in recent_candles.iterrows():
+                candle_time = candle.name if hasattr(candle, 'name') else idx
+                high_price = candle['high']
+                low_price = candle['low']
+                
+                # Kiểm tra SL hit
+                if signal == "BUY" and low_price <= sl_price:
+                    return {
+                        'type': 'SL',
+                        'price': sl_price,
+                        'method': 'wick_detection',
+                        'candle_time': candle_time,
+                        'candle_low': low_price,
+                        'timestamp': datetime.now(pytz.timezone("Asia/Bangkok"))
+                    }
+                elif signal == "SELL" and high_price >= sl_price:
+                    return {
+                        'type': 'SL', 
+                        'price': sl_price,
+                        'method': 'wick_detection',
+                        'candle_time': candle_time,
+                        'candle_high': high_price,
+                        'timestamp': datetime.now(pytz.timezone("Asia/Bangkok"))
+                    }
+                
+                # Kiểm tra TP hit
+                if signal == "BUY" and high_price >= tp_price:
+                    return {
+                        'type': 'TP',
+                        'price': tp_price,
+                        'method': 'wick_detection',
+                        'candle_time': candle_time,
+                        'candle_high': high_price,
+                        'timestamp': datetime.now(pytz.timezone("Asia/Bangkok"))
+                    }
+                elif signal == "SELL" and low_price <= tp_price:
+                    return {
+                        'type': 'TP',
+                        'price': tp_price,
+                        'method': 'wick_detection',
+                        'candle_time': candle_time,
+                        'candle_low': low_price,
+                        'timestamp': datetime.now(pytz.timezone("Asia/Bangkok"))
+                    }
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ [Real-time Monitor] Wick detection error for {symbol}: {e}")
+            return None
+    
+    async def _get_realtime_price(self, symbol):
+        """Lấy giá real-time với retry logic"""
+        for attempt in range(MAX_REALTIME_RETRIES):
+            try:
+                # Thử lấy từ data manager
+                price = self.data_manager.get_current_price(symbol)
+                if price is not None:
+                    return price
+                
+                # Fallback: lấy từ API trực tiếp
+                price = await self._fetch_price_from_api(symbol)
+                if price is not None:
+                    return price
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ [Real-time Monitor] Price fetch attempt {attempt+1} failed for {symbol}: {e}")
+                if attempt < MAX_REALTIME_RETRIES - 1:
+                    await asyncio.sleep(1)
+        
+        return None
+    
+    async def _fetch_price_from_api(self, symbol):
+        """Lấy giá trực tiếp từ API"""
+        try:
+            # Sử dụng timeout cho API call
+            async with asyncio.timeout(REALTIME_TIMEOUT):
+                # Thử các API khác nhau
+                price = self.data_manager.get_finnhub_real_time(symbol)
+                if price and 'c' in price:
+                    return float(price['c'])
+                
+                price = self.data_manager.get_eodhd_real_time(symbol)
+                if price and 'close' in price:
+                    return float(price['close'])
+                    
+        except asyncio.TimeoutError:
+            self.logger.warning(f"⚠️ [Real-time Monitor] API timeout for {symbol}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ [Real-time Monitor] API error for {symbol}: {e}")
+        
+        return None
+    
+    async def _handle_position_hit(self, symbol, hit_result):
+        """Xử lý khi phát hiện SL/TP bị hit"""
+        try:
+            hit_type = hit_result['type']
+            hit_price = hit_result['price']
+            method = hit_result['method']
+            
+            # Log thông tin chi tiết
+            if method == 'wick_detection':
+                candle_info = f"candle at {hit_result.get('candle_time', 'unknown')}"
+                if hit_type == 'SL':
+                    extreme_price = hit_result.get('candle_low') or hit_result.get('candle_high')
+                else:
+                    extreme_price = hit_result.get('candle_high') or hit_result.get('candle_low')
+                
+                self.logger.info(
+                    f"🎯 [Real-time Monitor] {symbol} {hit_type} HIT by WICK! "
+                    f"Price: {hit_price:.5f}, Extreme: {extreme_price:.5f}, {candle_info}"
+                )
+                print(f"🎯 [Real-time Monitor] {symbol}: {hit_type} hit by wick at {hit_price:.5f}")
+            else:
+                self.logger.info(
+                    f"🎯 [Real-time Monitor] {symbol} {hit_type} HIT! "
+                    f"Current price: {hit_price:.5f}"
+                )
+                print(f"🎯 [Real-time Monitor] {symbol}: {hit_type} hit at {hit_price:.5f}")
+            
+            # Gọi callback để đóng vị thế (sẽ được implement trong bot chính)
+            if hasattr(self, 'position_hit_callback') and self.position_hit_callback:
+                await self.position_hit_callback(symbol, hit_result)
+            
+            # Xóa vị thế khỏi danh sách theo dõi
+            if symbol in self.positions_to_monitor:
+                del self.positions_to_monitor[symbol]
+                
+        except Exception as e:
+            self.logger.error(f"❌ [Real-time Monitor] Error handling position hit for {symbol}: {e}")
+    
+    def set_position_hit_callback(self, callback):
+        """Đặt callback function để xử lý khi vị thế bị hit"""
+        self.position_hit_callback = callback
+    
+    def get_monitoring_status(self):
+        """Lấy trạng thái monitoring hiện tại"""
+        return {
+            'monitoring_active': self.monitoring_active,
+            'positions_count': len(self.positions_to_monitor),
+            'monitored_symbols': list(self.positions_to_monitor.keys()),
+            'config': {
+                'enabled': ENABLE_REALTIME_MONITORING,
+                'check_interval': REALTIME_CHECK_INTERVAL,
+                'wick_detection': ENABLE_WICK_DETECTION,
+                'wick_candles': WICK_DETECTION_CANDLES,
+                'max_retries': MAX_REALTIME_RETRIES,
+                'timeout': REALTIME_TIMEOUT
+            }
+        }
 
 class TimeFrame(Enum):
     """Enum for timeframes"""
@@ -15174,6 +15476,17 @@ class EnhancedTradingBot:
         
         self._init_database()
         
+        # Initialize Real-time Monitor for SL/TP detection
+        print("🔄 [Bot Init] Initializing Real-time Monitor...")
+        try:
+            self.realtime_monitor = RealTimeMonitor(self.data_manager, self.logger)
+            # Set callback để xử lý khi SL/TP bị hit
+            self.realtime_monitor.set_position_hit_callback(self._handle_realtime_sl_tp_hit)
+            print(" [Bot Init] Real-time Monitor initialized successfully")
+        except Exception as e:
+            print(f" [Bot Init] Failed to initialize Real-time Monitor: {e}")
+            self.realtime_monitor = None
+        
         print(" [Bot Init] EnhancedTradingBot initialization completed successfully!")
 
     def _debug_news_manager_status(self):
@@ -18490,6 +18803,11 @@ class EnhancedTradingBot:
 
             self.open_positions[symbol] = position_details
             save_open_positions(self.open_positions)
+            
+            # Bắt đầu real-time monitoring cho vị thế mới
+            if hasattr(self, 'realtime_monitor') and self.realtime_monitor:
+                self.realtime_monitor.update_positions(self.open_positions)
+                print(f"🔄 [Real-time Monitor] Started monitoring {symbol} for SL/TP hits")
 
             # Extract Master Agent decision from reasoning
             master_decision = None
@@ -18526,12 +18844,83 @@ class EnhancedTradingBot:
 
     # TM V THAY THFunction this in l p EnhancedTradingBot
 
+    async def _handle_realtime_sl_tp_hit(self, symbol, hit_result):
+        """
+        Callback function để xử lý khi Real-time Monitor phát hiện SL/TP bị hit
+        """
+        try:
+            hit_type = hit_result['type']
+            hit_price = hit_result['price']
+            method = hit_result['method']
+            
+            # Tạo reason message chi tiết
+            if method == 'wick_detection':
+                reason = f"Hit {hit_type} (Wick Detection)"
+                print(f"🎯 [Real-time Hit] {symbol}: {reason} at {hit_price:.5f}")
+                self.logger.info(f"🎯 [Real-time Hit] {symbol}: {hit_type} hit by wick detection at {hit_price:.5f}")
+            else:
+                reason = f"Hit {hit_type} (Real-time)"
+                print(f"🎯 [Real-time Hit] {symbol}: {reason} at {hit_price:.5f}")
+                self.logger.info(f"🎯 [Real-time Hit] {symbol}: {hit_type} hit by real-time monitoring at {hit_price:.5f}")
+            
+            # Đóng vị thế
+            await self.close_position_enhanced(symbol, reason, hit_price, send_alert=True)
+            
+            # Gửi Discord alert đặc biệt cho wick detection
+            if method == 'wick_detection':
+                alert_data = {
+                    "Symbol": symbol,
+                    "Type": hit_type,
+                    "Method": "Wick Detection",
+                    "Price": f"{hit_price:.5f}",
+                    "Candle Time": hit_result.get('candle_time', 'Unknown'),
+                    "Extreme Price": hit_result.get('candle_low') or hit_result.get('candle_high', 'N/A')
+                }
+                self.send_discord_alert(
+                    f"🎯 **WICK {hit_type} HIT DETECTED!**\n{symbol} - {reason}",
+                    "WARNING",
+                    "HIGH",
+                    alert_data
+                )
+            
+        except Exception as e:
+            self.logger.error(f"❌ [Real-time Hit] Error handling hit for {symbol}: {e}")
+            print(f"❌ [Real-time Hit] Error handling hit for {symbol}: {e}")
+    
+    def display_realtime_monitoring_status(self):
+        """Hiển thị trạng thái real-time monitoring"""
+        if not hasattr(self, 'realtime_monitor') or not self.realtime_monitor:
+            print("⚠️ [Real-time Monitor] Not initialized")
+            return
+        
+        status = self.realtime_monitor.get_monitoring_status()
+        
+        print("\n🔄 [Real-time Monitor] Status:")
+        print(f"   - Active: {'✅' if status['monitoring_active'] else '❌'}")
+        print(f"   - Positions monitored: {status['positions_count']}")
+        if status['monitored_symbols']:
+            print(f"   - Symbols: {', '.join(status['monitored_symbols'])}")
+        
+        config = status['config']
+        print(f"\n🛠️ [Real-time Monitor] Configuration:")
+        print(f"   - Enabled: {'✅' if config['enabled'] else '❌'}")
+        print(f"   - Check interval: {config['check_interval']}s")
+        print(f"   - Wick detection: {'✅' if config['wick_detection'] else '❌'}")
+        print(f"   - Wick candles: {config['wick_candles']}")
+        print(f"   - Max retries: {config['max_retries']}")
+        print(f"   - Timeout: {config['timeout']}s")
+
     async def close_position_enhanced(self, symbol, reason, exit_price, send_alert=True):
         if symbol not in self.open_positions:
             return
         position = self.open_positions.pop(symbol)
         save_open_positions(self.open_positions)
         closed_at = datetime.now(pytz.timezone("Asia/Bangkok"))
+        
+        # Cập nhật real-time monitoring sau khi đóng vị thế
+        if hasattr(self, 'realtime_monitor') and self.realtime_monitor:
+            self.realtime_monitor.update_positions(self.open_positions)
+            print(f"🔄 [Real-time Monitor] Stopped monitoring {symbol}")
 
         # --- LOGIfromCA M I ---
         pip_value = self.calculate_pip_value(symbol)
@@ -20167,6 +20556,14 @@ class EnhancedTradingBot:
         }
         self.send_discord_alert(" **Advanced Bot Started Successfully!**", "SUCCESS", "NORMAL", startup_data)
 
+        # Khởi động real-time monitoring cho các vị thế hiện có
+        if hasattr(self, 'realtime_monitor') and self.realtime_monitor and self.open_positions:
+            self.realtime_monitor.start_monitoring(self.open_positions)
+            print(f"🔄 [Real-time Monitor] Started monitoring {len(self.open_positions)} existing positions")
+        
+        # Hiển thị trạng thái real-time monitoring
+        self.display_realtime_monitoring_status()
+
         while True:
             try:
                 # Execute main bot cycle
@@ -20176,6 +20573,12 @@ class EnhancedTradingBot:
             except KeyboardInterrupt:
                 logger.info("Bot stopped by user")
                 print("\n Bot d duc dng bi ngui dng.")
+                
+                # Dừng real-time monitoring
+                if hasattr(self, 'realtime_monitor') and self.realtime_monitor:
+                    self.realtime_monitor.stop_monitoring()
+                    print("🔄 [Real-time Monitor] Monitoring stopped")
+                
                 self.send_discord_alert(" **Bot Stopped by User**", "INFO", "NORMAL")
                 if self.conn: 
                     self.conn.close()
